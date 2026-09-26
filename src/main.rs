@@ -44,6 +44,34 @@ enum Commands {
     /// Type one sentence, timed, with chording on or off, and get WPM +
     /// accuracy. Run it once each way to compare.
     Benchmark(BenchmarkArgs),
+    /// Produce a two-word phrase once ("about me") and get a per-segment
+    /// timing breakdown (word 1, the word-to-word transition, word 2 +
+    /// Return). Run with and without --chording to compare where the time
+    /// actually goes.
+    Segments(SegmentsArgs),
+}
+
+#[derive(Args, Clone)]
+struct SegmentsArgs {
+    /// The two words to produce, space-separated.
+    #[arg(long, default_value = "about me")]
+    phrase: String,
+
+    /// Chord the words instead of typing them. Chord word 1, pause, chord
+    /// word 2, then Return — no manual spaces (korder emits those). The
+    /// pause lets word 1 commit before word 2 starts; without it the two
+    /// chords merge into one unresolvable burst.
+    #[arg(long)]
+    chording: bool,
+
+    #[arg(long, default_value = "data/dictionary.en.csv")]
+    dictionary: PathBuf,
+
+    #[arg(long)]
+    abbrev: Option<PathBuf>,
+
+    #[arg(long, default_value_t = 200)]
+    roll_gap_ms: u64,
 }
 
 #[derive(Args, Clone)]
@@ -145,6 +173,7 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::DetectRollover) => detect_rollover(),
         Some(Commands::Run(args)) => run(args),
         Some(Commands::Benchmark(args)) => cmd_benchmark(args),
+        Some(Commands::Segments(args)) => cmd_segments(args),
         None => run(cli.run_args),
     }
 }
@@ -544,6 +573,273 @@ fn benchmark_chord_loop(
         }
     }
     anyhow::bail!("listener thread ended unexpectedly")
+}
+
+fn cmd_segments(args: SegmentsArgs) -> anyhow::Result<()> {
+    let words: Vec<String> = args.phrase.split_whitespace().map(str::to_string).collect();
+    let [w1, w2] = <[String; 2]>::try_from(words)
+        .map_err(|_| anyhow::anyhow!("--phrase must be exactly two words"))?;
+
+    if args.chording {
+        segments_chording(&args, &w1, &w2)
+    } else {
+        segments_typing(&w1, &w2)
+    }
+}
+
+/// One typed attempt at "<w1> <w2>", segmented by the press instants of
+/// its individual keys. Validates the keystrokes matched the phrase
+/// exactly (any typo/backspace makes the segment boundaries meaningless),
+/// and asks for a retry otherwise.
+fn segments_typing(w1: &str, w2: &str) -> anyhow::Result<()> {
+    println!("(typing)");
+    let (tx, event_rx) = mpsc::channel::<(Instant, EventType)>();
+    std::thread::spawn(move || {
+        let rx = spawn_listener();
+        for event in rx {
+            let at = Instant::now();
+            if tx.send((at, event.event_type)).is_err() {
+                return;
+            }
+        }
+    });
+    warm_up_listener();
+    while event_rx.try_recv().is_ok() {}
+
+    println!("\nType \"{w1} {w2}\", then Enter:\n");
+    print!("> ");
+    io::stdout().flush()?;
+    let mut typed = String::new();
+    io::stdin().read_line(&mut typed)?;
+    std::thread::sleep(Duration::from_millis(30));
+
+    // Ordered press instants, classified into letters / space / return.
+    let mut letters_and_space: Vec<(Instant, Option<char>)> = Vec::new(); // None = space
+    let mut ret: Option<Instant> = None;
+    while let Ok((at, event_type)) = event_rx.try_recv() {
+        if let EventType::KeyPress(key) = event_type {
+            if key == RdevKey::Return {
+                ret.get_or_insert(at);
+            } else if key == RdevKey::Space {
+                letters_and_space.push((at, None));
+            } else if let Some(c) = key_to_letter(key) {
+                letters_and_space.push((at, Some(c)));
+            }
+        }
+    }
+
+    let expected: Vec<Option<char>> = w1
+        .chars()
+        .map(Some)
+        .chain(std::iter::once(None))
+        .chain(w2.chars().map(Some))
+        .collect();
+    let observed: Vec<Option<char>> = letters_and_space.iter().map(|(_, c)| *c).collect();
+    let Some(ret) = ret else {
+        anyhow::bail!("no Return seen — did you press Enter?");
+    };
+    if observed != expected {
+        anyhow::bail!(
+            "keystrokes didn't match \"{w1} {w2}\" exactly (segment boundaries need a clean attempt) — try again"
+        );
+    }
+
+    let i_space = w1.chars().count();
+    let report = benchmark::SegmentReport::typing(
+        w1,
+        w2,
+        letters_and_space[0].0,           // w1 first letter
+        letters_and_space[i_space - 1].0, // w1 last letter
+        letters_and_space[i_space].0,     // space
+        letters_and_space[i_space + 1].0, // w2 first letter
+        ret,
+    );
+    report.print("typing");
+    Ok(())
+}
+
+/// A chord commit (or the terminating Return) reported by the segments
+/// chord loop, with the instants the segment math needs.
+enum SegEvent {
+    Chord {
+        word: String,
+        first_press: Instant,
+        last_release: Instant,
+    },
+    Return {
+        at: Instant,
+    },
+}
+
+/// One chorded attempt at "<w1> <w2>": chord w1, pause (so it idle-commits
+/// before w2 starts), chord w2, Return. Segments from the two commits'
+/// press/release instants plus the Return.
+fn segments_chording(args: &SegmentsArgs, w1: &str, w2: &str) -> anyhow::Result<()> {
+    let mut dict = Dictionary::load(&args.dictionary)?;
+    if let Some(abbrev) = &args.abbrev {
+        dict.merge_overlay(abbrev)?;
+    }
+    if dict.is_empty() {
+        anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
+    }
+    let injector = Injector::new()?;
+    let roll_gap_ms = args.roll_gap_ms;
+    let (tx, seg_rx) = mpsc::channel::<SegEvent>();
+    std::thread::spawn(move || {
+        if let Err(e) = segments_chord_loop(dict, roll_gap_ms, injector, tx) {
+            eprintln!("korder: chord engine stopped: {e}");
+        }
+    });
+    println!("(chording)");
+    warm_up_listener();
+    while seg_rx.try_recv().is_ok() {}
+
+    println!("\nChord \"{w1}\", pause, chord \"{w2}\", then Enter:\n");
+    print!("> ");
+    io::stdout().flush()?;
+    let mut typed = String::new();
+    io::stdin().read_line(&mut typed)?;
+    std::thread::sleep(Duration::from_millis(80)); // let the Return-triggered commit report
+
+    let mut chords: Vec<(String, Instant, Instant)> = Vec::new();
+    let mut ret: Option<Instant> = None;
+    while let Ok(ev) = seg_rx.try_recv() {
+        match ev {
+            SegEvent::Chord {
+                word,
+                first_press,
+                last_release,
+            } => chords.push((word, first_press, last_release)),
+            SegEvent::Return { at } => {
+                ret.get_or_insert(at);
+            }
+        }
+    }
+
+    let Some(ret) = ret else {
+        anyhow::bail!("no Return seen — did you press Enter?");
+    };
+    let got: Vec<&str> = chords.iter().map(|(w, ..)| w.as_str()).collect();
+    if got != [w1, w2] {
+        anyhow::bail!(
+            "expected chords [{w1}, {w2}] but got {got:?} — pause longer between the two chords so the first commits before the second starts, then try again"
+        );
+    }
+
+    let report = benchmark::SegmentReport::chording(
+        w1,
+        w2,
+        chords[0].1, // w1 first press
+        chords[0].2, // w1 last release
+        chords[1].1, // w2 first press
+        ret,
+    );
+    report.print("chording");
+    Ok(())
+}
+
+/// Chord loop for the segments benchmark: reports each committed matched
+/// chord with its first-key-press and last-key-release instants, plus the
+/// terminating Return. Idle-commits (via a poll tick) so word 1 resolves
+/// during the pause before word 2, rather than merging with it.
+fn segments_chord_loop(
+    dict: Dictionary,
+    roll_gap_ms: u64,
+    mut injector: Injector,
+    tx: mpsc::Sender<SegEvent>,
+) -> anyhow::Result<()> {
+    let mut buffer = ChordBuffer::new(Duration::from_millis(roll_gap_ms));
+    let mut held: HashSet<char> = HashSet::new();
+    let mut burst_first: Option<Instant> = None;
+    let mut last_release: Option<Instant> = None;
+    let rx = spawn_listener();
+    let tick = Duration::from_millis(50);
+
+    let commit = |buffer: &mut ChordBuffer,
+                  burst: matcher::BurstResult,
+                  burst_first: &mut Option<Instant>,
+                  last_release: &mut Option<Instant>,
+                  injector: &mut Injector,
+                  now: Instant| {
+        let _ = buffer;
+        if let Some(word) = handle_burst(&burst, &dict, Some(injector), true) {
+            let _ = tx.send(SegEvent::Chord {
+                word,
+                first_press: burst_first.unwrap_or(now),
+                last_release: last_release.unwrap_or(now),
+            });
+        }
+        *burst_first = None;
+        *last_release = None;
+    };
+
+    loop {
+        match rx.recv_timeout(tick) {
+            Ok(event) => {
+                let now = Instant::now();
+                match event.event_type {
+                    EventType::KeyPress(key) if key == RdevKey::Return => {
+                        if let Some(burst) = buffer.flush_now() {
+                            commit(
+                                &mut buffer,
+                                burst,
+                                &mut burst_first,
+                                &mut last_release,
+                                &mut injector,
+                                now,
+                            );
+                        }
+                        let _ = tx.send(SegEvent::Return { at: now });
+                    }
+                    EventType::KeyPress(key) => match key_to_letter(key) {
+                        Some(c) => {
+                            burst_first.get_or_insert(now);
+                            held.insert(c);
+                            buffer.key_down(c, now);
+                        }
+                        None => {
+                            if let Some(burst) = buffer.flush_now() {
+                                commit(
+                                    &mut buffer,
+                                    burst,
+                                    &mut burst_first,
+                                    &mut last_release,
+                                    &mut injector,
+                                    now,
+                                );
+                            }
+                        }
+                    },
+                    EventType::KeyRelease(key) => {
+                        if let Some(c) = key_to_letter(key) {
+                            buffer.key_up(c, now);
+                            held.remove(&c);
+                            if held.is_empty() {
+                                last_release = Some(now);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let now = Instant::now();
+                if let Some(burst) = buffer.flush_if_idle(now) {
+                    commit(
+                        &mut buffer,
+                        burst,
+                        &mut burst_first,
+                        &mut last_release,
+                        &mut injector,
+                        now,
+                    );
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                anyhow::bail!("listener thread ended unexpectedly");
+            }
+        }
+    }
 }
 
 /// Resolves and (optionally) injects a committed chord. Returns the

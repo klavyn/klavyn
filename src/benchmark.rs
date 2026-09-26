@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// A default sample if the user doesn't supply their own --sentence. Chosen
 /// to include a few chords likely to be in data/dictionary.en.csv's top few
@@ -214,6 +214,103 @@ impl Report {
     }
 }
 
+/// A per-segment timing breakdown of producing a two-word phrase
+/// ("about me"), split into: S1 execute word 1; S2/S3 the space handling
+/// (typing only — n/a when chording, which emits its own spaces); S4 the
+/// full word-1-to-word-2 transition (= S2 + S3 when typing); S5 execute
+/// word 2 plus the terminating Return.
+pub struct SegmentReport {
+    pub word1: String,
+    pub word2: String,
+    pub s1: Duration,
+    pub s2: Option<Duration>,
+    pub s3: Option<Duration>,
+    pub s4: Duration,
+    pub s5: Duration,
+}
+
+impl SegmentReport {
+    /// Typing: word 1's first-letter press → its last-letter press (S1);
+    /// last letter → space (S2); space → word 2's first letter (S3);
+    /// their sum (S4); word 2's first letter → Return (S5).
+    pub fn typing(
+        word1: &str,
+        word2: &str,
+        w1_first: Instant,
+        w1_last: Instant,
+        space: Instant,
+        w2_first: Instant,
+        ret: Instant,
+    ) -> Self {
+        let s2 = space.saturating_duration_since(w1_last);
+        let s3 = w2_first.saturating_duration_since(space);
+        Self {
+            word1: word1.to_string(),
+            word2: word2.to_string(),
+            s1: w1_last.saturating_duration_since(w1_first),
+            s2: Some(s2),
+            s3: Some(s3),
+            s4: s2 + s3,
+            s5: ret.saturating_duration_since(w2_first),
+        }
+    }
+
+    /// Chording: word 1's first key-press → its last key-release (S1);
+    /// that release → word 2's first key-press (S4, the transition);
+    /// word 2's first key-press → Return (S5). No space segments.
+    pub fn chording(
+        word1: &str,
+        word2: &str,
+        w1_first_press: Instant,
+        w1_last_release: Instant,
+        w2_first_press: Instant,
+        ret: Instant,
+    ) -> Self {
+        Self {
+            word1: word1.to_string(),
+            word2: word2.to_string(),
+            s1: w1_last_release.saturating_duration_since(w1_first_press),
+            s2: None,
+            s3: None,
+            s4: w2_first_press.saturating_duration_since(w1_last_release),
+            s5: ret.saturating_duration_since(w2_first_press),
+        }
+    }
+
+    pub fn total(&self) -> Duration {
+        self.s1 + self.s4 + self.s5
+    }
+
+    pub fn print(&self, label: &str) {
+        let opt = |d: Option<Duration>| match d {
+            Some(d) => format!("{:.3}s", d.as_secs_f64()),
+            None => "n/a".to_string(),
+        };
+        println!();
+        println!(
+            "=== {label}: \"{}\" + \"{}\" segments ===",
+            self.word1, self.word2
+        );
+        println!(
+            "S1 execute \"{}\"        : {:.3}s",
+            self.word1,
+            self.s1.as_secs_f64()
+        );
+        println!("S2 last letter -> space  : {}", opt(self.s2));
+        println!("S3 space -> next word    : {}", opt(self.s3));
+        println!("S4 transition            : {:.3}s", self.s4.as_secs_f64());
+        println!(
+            "S5 execute \"{}\" + Return : {:.3}s",
+            self.word2,
+            self.s5.as_secs_f64()
+        );
+        println!(
+            "total (S1+S4+S5)         : {:.3}s",
+            self.total().as_secs_f64()
+        );
+    }
+}
+
 fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -233,6 +330,34 @@ fn levenshtein(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typing_segments_split_the_transition() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        // a@0 ... t@400 (S1=400), space@500 (S2=100), m@640 (S3=140), Return@850 (S5=210)
+        let r = SegmentReport::typing("about", "me", at(0), at(400), at(500), at(640), at(850));
+        assert_eq!(r.s1, Duration::from_millis(400));
+        assert_eq!(r.s2, Some(Duration::from_millis(100)));
+        assert_eq!(r.s3, Some(Duration::from_millis(140)));
+        assert_eq!(r.s4, Duration::from_millis(240)); // S2 + S3
+        assert_eq!(r.s5, Duration::from_millis(210));
+        assert_eq!(r.total(), Duration::from_millis(850)); // S1 + S4 + S5
+    }
+
+    #[test]
+    fn chording_segments_have_no_space_parts() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        // about: first press@0, last release@40 (S1=40); me first press@300
+        // (S4=260); Return@360 (S5=60)
+        let r = SegmentReport::chording("about", "me", at(0), at(40), at(300), at(360));
+        assert_eq!(r.s1, Duration::from_millis(40));
+        assert_eq!(r.s2, None);
+        assert_eq!(r.s3, None);
+        assert_eq!(r.s4, Duration::from_millis(260));
+        assert_eq!(r.s5, Duration::from_millis(60));
+    }
 
     #[test]
     fn perfect_typing_scores_100_percent_both_ways() {
