@@ -6,7 +6,8 @@ mod matcher;
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand};
@@ -426,8 +427,14 @@ fn run_chorded_trials(args: &BenchmarkArgs, word: &str, n: u32) -> anyhow::Resul
     let injector = Injector::new()?;
     let roll_gap_ms = args.roll_gap_ms;
     let (span_tx, span_rx) = mpsc::channel::<ChordSpan>();
+    // Set true at each trial boundary; the engine clears its burst timing
+    // and buffer on the next event, so no keypress from a prior trial (or
+    // the reset-to-home-row movement between them) can leak into this
+    // trial's span, and two rapid trials can't bleed into one burst.
+    let reset = Arc::new(AtomicBool::new(false));
+    let engine_reset = Arc::clone(&reset);
     std::thread::spawn(move || {
-        if let Err(e) = benchmark_chord_loop(dict, roll_gap_ms, injector, span_tx) {
+        if let Err(e) = benchmark_chord_loop(dict, roll_gap_ms, injector, span_tx, engine_reset) {
             eprintln!("korder: chord engine stopped: {e}");
         }
     });
@@ -435,10 +442,11 @@ fn run_chorded_trials(args: &BenchmarkArgs, word: &str, n: u32) -> anyhow::Resul
 
     let mut trials = Vec::with_capacity(n as usize);
     for i in 1..=n {
+        reset.store(true, Ordering::SeqCst);
+        while span_rx.try_recv().is_ok() {} // drop any spans from before this trial
+
         print!("\nTrial {i}/{n}: chord \"{word}\", then Enter... ");
         io::stdout().flush()?;
-
-        while span_rx.try_recv().is_ok() {} // drop any spans from before this trial
 
         let mut typed = String::new();
         io::stdin().read_line(&mut typed)?;
@@ -478,12 +486,20 @@ fn benchmark_chord_loop(
     roll_gap_ms: u64,
     mut injector: Injector,
     span_tx: mpsc::Sender<ChordSpan>,
+    reset: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let mut buffer = ChordBuffer::new(Duration::from_millis(roll_gap_ms));
     let mut burst_first: Option<Instant> = None;
     let mut burst_last = Instant::now();
     let rx = spawn_listener();
     for event in rx {
+        // Clear all carried state at a trial boundary before touching this
+        // event, so the first letter of the new trial anchors burst_first
+        // fresh and no prior-trial chord is still pending in the buffer.
+        if reset.swap(false, Ordering::SeqCst) {
+            buffer = ChordBuffer::new(Duration::from_millis(roll_gap_ms));
+            burst_first = None;
+        }
         let now = Instant::now();
         match event.event_type {
             EventType::KeyPress(key) => match key_to_letter(key) {
