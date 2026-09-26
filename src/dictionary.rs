@@ -15,17 +15,30 @@ pub struct Dictionary {
 
 impl Dictionary {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
+        let mut dict = Self {
+            by_letterset: HashMap::new(),
+        };
+        dict.merge_overlay(path)?;
+        Ok(dict)
+    }
+
+    /// Loads a second CSV (same letterset,word,... format) on top of this
+    /// one. Entries here win on a letterset collision — meant for a
+    /// hand-curated abbreviation tier (e.g. "bc" -> "because") sitting on
+    /// top of the auto-generated spelling dictionary, since a mnemonic
+    /// code isn't derived from a word's letters the way the base
+    /// dictionary's entries are, so it can't be generated the same way.
+    pub fn merge_overlay(&mut self, path: &Path) -> anyhow::Result<()> {
         let mut reader = csv::Reader::from_path(path)?;
-        let mut by_letterset = HashMap::new();
         for record in reader.records() {
             let record = record?;
             let letterset = record.get(0).unwrap_or_default().to_string();
             let word = record.get(1).unwrap_or_default().to_string();
             if !letterset.is_empty() && !word.is_empty() {
-                by_letterset.insert(letterset, word);
+                self.by_letterset.insert(letterset, word);
             }
         }
-        Ok(Self { by_letterset })
+        Ok(())
     }
 
     pub fn len(&self) -> usize {
@@ -78,5 +91,15 @@ mod tests {
         let f = temp_dict(&[("klo", "look")]);
         let dict = Dictionary::load(f.path()).unwrap();
         assert_eq!(dict.lookup(&['x', 'y', 'z']), None);
+    }
+
+    #[test]
+    fn overlay_wins_on_collision_but_leaves_other_entries_alone() {
+        let base = temp_dict(&[("klo", "look"), ("eht", "the")]);
+        let mut dict = Dictionary::load(base.path()).unwrap();
+        let abbrev = temp_dict(&[("klo", "kilo")]); // arbitrary curated code, unrelated spelling
+        dict.merge_overlay(abbrev.path()).unwrap();
+        assert_eq!(dict.lookup(&['l', 'o', 'k']), Some("kilo"));
+        assert_eq!(dict.lookup(&['e', 'h', 't']), Some("the"));
     }
 }

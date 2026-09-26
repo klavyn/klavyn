@@ -62,6 +62,10 @@ struct BenchmarkArgs {
     #[arg(long, default_value = "data/dictionary.en.csv")]
     dictionary: PathBuf,
 
+    /// Optional abbreviation overlay when --chording is set (see RunArgs).
+    #[arg(long)]
+    abbrev: Option<PathBuf>,
+
     /// Roll gap when --chording is set.
     #[arg(long, default_value_t = 200)]
     roll_gap_ms: u64,
@@ -74,6 +78,14 @@ struct RunArgs {
     /// ...) built by scripts/build_dictionary.py.
     #[arg(long, default_value = "data/dictionary.en.csv")]
     dictionary: PathBuf,
+
+    /// Optional hand-curated abbreviation CSV (same letterset,word format),
+    /// merged on top of --dictionary — its entries win on collision. For
+    /// short mnemonic codes that aren't derived from a word's own letters
+    /// (e.g. "bc" -> "because"), which the auto-generated dictionary can't
+    /// produce. See data/abbrev.en.csv.
+    #[arg(long)]
+    abbrev: Option<PathBuf>,
 
     /// Max gap (ms), while nothing is held, before a new key press starts a
     /// *new* chord attempt instead of continuing the current one. This is
@@ -109,7 +121,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run(args: RunArgs) -> anyhow::Result<()> {
-    let dict = Dictionary::load(&args.dictionary)?;
+    let mut dict = Dictionary::load(&args.dictionary)?;
     if dict.is_empty() {
         anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
     }
@@ -118,6 +130,13 @@ fn run(args: RunArgs) -> anyhow::Result<()> {
         dict.len(),
         args.dictionary
     );
+    if let Some(abbrev) = &args.abbrev {
+        dict.merge_overlay(abbrev)?;
+        eprintln!(
+            "korder: merged abbreviations from {abbrev:?} (now {} chords)",
+            dict.len()
+        );
+    }
     if args.dry_run {
         eprintln!("korder: --dry-run, will only log detected chords");
     }
@@ -197,7 +216,10 @@ fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| benchmark::DEFAULT_SENTENCE.to_string());
 
     if args.chording {
-        let dict = Dictionary::load(&args.dictionary)?;
+        let mut dict = Dictionary::load(&args.dictionary)?;
+        if let Some(abbrev) = &args.abbrev {
+            dict.merge_overlay(abbrev)?;
+        }
         if dict.is_empty() {
             anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
         }
