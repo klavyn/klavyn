@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Download klavyn</title>
+<meta name="description" content="Install klavyn on macOS or Linux — one-line installer, cargo, or build from source." />
+<meta name="theme-color" content="#080b14" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/klavyn.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-in">
+      <a class="brand" href="/"><span class="k">k</span>la<span class="v">v</span>yn</a>
+      <nav class="links">
+        <a href="/docs">Docs</a>
+        <a href="/learn">Learn</a>
+        <a href="/download" class="active">Download</a>
+        <a class="gh" href="https://github.com/nickvigilante/klavyn">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero min">
+      <div class="glow"></div>
+      <div class="wrap hero-inner">
+        <p class="page-kicker">Download</p>
+        <h1 class="page-title">Install <span class="wm"><span class="k">k</span>la<span class="v">v</span>yn</span></h1>
+        <p class="sub">macOS and Linux. One line to start; <code>cargo</code> or source if you'd rather.</p>
+        <div class="install">
+          <div class="cmd">
+            <span class="code"><span class="prompt">$ </span>curl -fsSL <b>https://klavyn.app/install.sh</b> | sh</span>
+            <button class="copy" data-copy="curl -fsSL https://klavyn.app/install.sh | sh" aria-label="Copy">Copy</button>
+          </div>
+          <p class="cmd-note">Prefer to read it first? <a href="/install.sh">View install.sh</a> before piping to a shell — always a good habit.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="prose wrap">
+      <h2>Package managers</h2>
+      <p>Install from source with Cargo (Rust's package manager). Until tagged binary releases land, this builds the latest from the repository:</p>
+      <pre><code><span class="prompt">$ </span>cargo install --git https://github.com/nickvigilante/klavyn klavyn</code></pre>
+      <p>The one-line installer above does this for you automatically when no prebuilt binary matches your platform.</p>
+
+      <h2>Build from source</h2>
+      <pre><code><span class="prompt">$ </span>git clone https://github.com/nickvigilante/klavyn
+<span class="prompt">$ </span>cd klavyn
+<span class="prompt">$ </span>cargo build --release
+<span class="prompt">$ </span>./target/release/klavyn --quiet</code></pre>
+
+      <h2>Platform notes</h2>
+
+      <div class="callout">
+        <span class="tag">macOS</span>
+        <p>klavyn asks for two permissions the first time you run it (System&nbsp;Settings → Privacy&nbsp;&amp;&nbsp;Security): <strong>Input Monitoring</strong> (to see key presses) and <strong>Accessibility</strong> (to inject the backspace/retype correction). Accessibility isn't needed in <code>--dry-run</code> mode.</p>
+      </div>
+
+      <div class="callout">
+        <span class="tag">Linux</span>
+        <p>The global-input backend targets X11. You'll need the X11 development libraries at build time (Debian/Ubuntu: <code>libxi-dev libxtst-dev libx11-dev</code>) and either membership in the <code>input</code> group or matching udev rules for raw input access. Wayland sessions are a known weak spot for this whole category of tool.</p>
+      </div>
+
+      <div class="callout warn">
+        <span class="tag">Heads up</span>
+        <p>klavyn is, mechanically, a global keyboard listener — chording can't work any other way. It makes no network calls and writes nothing you type to disk. Read <a href="https://github.com/nickvigilante/klavyn/blob/main/SECURITY.md">SECURITY.md</a> and verify each claim before you trust it.</p>
+      </div>
+
+      <h2>First run</h2>
+      <pre><code><span class="prompt">$ </span>klavyn --quiet
+klavyn: loaded 4112 chords from "data/dictionary.en.csv"
+klavyn: listening globally (roll gap 200ms). Ctrl+C to quit.
+klavyn: chord "klo" -&gt; "look"</code></pre>
+      <p>New to chorded typing? Start with <a href="/learn">Learn</a>. Ready to configure it? See the <a href="/docs">docs</a>.</p>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot-in">
+      <a class="brand" href="/" style="font-size:17px"><span class="k">k</span>la<span class="v">v</span>yn</a>
+      <div class="foot-links">
+        <a href="/docs">Docs</a>
+        <a href="/learn">Learn</a>
+        <a href="/download">Download</a>
+        <a href="https://github.com/nickvigilante/klavyn">GitHub</a>
+        <a href="https://github.com/nickvigilante/klavyn/blob/main/SECURITY.md">Security</a>
+      </div>
+      <span class="foot-note">MIT / Apache-2.0 · klavyn.app</span>
+    </div>
+  </footer>
+  <script src="/copy.js"></script>
+</body>
+</html>
