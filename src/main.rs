@@ -1,8 +1,10 @@
+mod benchmark;
 mod dictionary;
 mod inject;
 mod matcher;
 
 use std::collections::HashSet;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -38,6 +40,31 @@ enum Commands {
     /// of this ceiling, but it's useful for knowing which words you'll
     /// need to roll rather than hold.
     DetectRollover,
+    /// Type one sentence, timed, with chording on or off, and get WPM +
+    /// accuracy. Run it once each way to compare.
+    Benchmark(BenchmarkArgs),
+}
+
+#[derive(Args, Clone)]
+struct BenchmarkArgs {
+    /// Sentence to type. Defaults to a short built-in sample.
+    #[arg(long)]
+    sentence: Option<String>,
+
+    /// Run korder's chord engine in the background during the timed
+    /// attempt, so chording the sentence's words gets corrected live (same
+    /// as `korder run`). Omit this to measure your normal, un-chorded
+    /// typing as a baseline.
+    #[arg(long)]
+    chording: bool,
+
+    /// Dictionary to use when --chording is set.
+    #[arg(long, default_value = "data/dictionary.en.csv")]
+    dictionary: PathBuf,
+
+    /// Roll gap when --chording is set.
+    #[arg(long, default_value_t = 200)]
+    roll_gap_ms: u64,
 }
 
 #[derive(Args, Clone)]
@@ -61,6 +88,14 @@ struct RunArgs {
     /// not Accessibility (to inject) — a safe way to try it first.
     #[arg(long)]
     dry_run: bool,
+
+    /// Don't print recognized chords (the resulting word, not your raw
+    /// keystrokes) to the terminal. See SECURITY.md: this output is never
+    /// written to a file or sent anywhere by korder itself, but if you
+    /// want zero terminal echo at all — e.g. on a shared or logged
+    /// terminal session — this suppresses it.
+    #[arg(long)]
+    quiet: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -68,6 +103,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Some(Commands::DetectRollover) => detect_rollover(),
         Some(Commands::Run(args)) => run(args),
+        Some(Commands::Benchmark(args)) => cmd_benchmark(args),
         None => run(cli.run_args),
     }
 }
@@ -90,13 +126,26 @@ fn run(args: RunArgs) -> anyhow::Result<()> {
         args.roll_gap_ms
     );
 
-    let mut injector = if args.dry_run {
+    let injector = if args.dry_run {
         None
     } else {
         Some(Injector::new()?)
     };
-    let mut buffer = ChordBuffer::new(Duration::from_millis(args.roll_gap_ms));
+    chord_loop(dict, args.roll_gap_ms, injector, args.quiet)
+}
 
+/// The core listen -> buffer -> match -> (optionally) correct loop, shared
+/// by `run` (blocks the main thread, for interactive use) and
+/// `cmd_benchmark`'s chorded mode (spawned on a background thread — the
+/// benchmark's own timing/capture happens on the main thread via stdin,
+/// same as it would for any other focused app).
+fn chord_loop(
+    dict: Dictionary,
+    roll_gap_ms: u64,
+    mut injector: Option<Injector>,
+    quiet: bool,
+) -> anyhow::Result<()> {
+    let mut buffer = ChordBuffer::new(Duration::from_millis(roll_gap_ms));
     let rx = spawn_listener();
     // A short recv timeout doubles as our idle-poll tick, so a chord commits
     // even if the user never presses another key (no trailing space, etc.).
@@ -110,7 +159,7 @@ fn run(args: RunArgs) -> anyhow::Result<()> {
                         Some(c) => buffer.key_down(c, now),
                         None => {
                             if let Some(burst) = buffer.flush_now() {
-                                handle_burst(&burst, &dict, injector.as_mut());
+                                handle_burst(&burst, &dict, injector.as_mut(), quiet);
                             }
                         }
                     },
@@ -124,7 +173,7 @@ fn run(args: RunArgs) -> anyhow::Result<()> {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(burst) = buffer.flush_if_idle(Instant::now()) {
-                    handle_burst(&burst, &dict, injector.as_mut());
+                    handle_burst(&burst, &dict, injector.as_mut(), quiet);
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -134,14 +183,71 @@ fn run(args: RunArgs) -> anyhow::Result<()> {
     }
 }
 
-fn handle_burst(burst: &matcher::BurstResult, dict: &Dictionary, injector: Option<&mut Injector>) {
+/// Times one attempt at typing `args.sentence` (or the built-in default),
+/// optionally with the chord engine running in the background.
+///
+/// This works by reusing the terminal's own line input rather than
+/// reimplementing raw keystroke capture: whether or not chording is on,
+/// whatever ends up in the submitted line — post-correction, if chording
+/// fired — is exactly what `chord_loop`'s injector would have sent to any
+/// other focused app, since a terminal is just another focused app to it.
+fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
+    let sentence = args
+        .sentence
+        .unwrap_or_else(|| benchmark::DEFAULT_SENTENCE.to_string());
+
+    if args.chording {
+        let dict = Dictionary::load(&args.dictionary)?;
+        if dict.is_empty() {
+            anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
+        }
+        let injector = Injector::new()?;
+        let roll_gap_ms = args.roll_gap_ms;
+        std::thread::spawn(move || {
+            // Always quiet: printing "chord X -> Y" mid-benchmark would
+            // clutter the timed prompt and give away words as they land.
+            if let Err(e) = chord_loop(dict, roll_gap_ms, Some(injector), true) {
+                eprintln!("korder: chord engine stopped: {e}");
+            }
+        });
+        println!("(chording ON)");
+    } else {
+        println!("(chording OFF — baseline)");
+    }
+
+    println!("\nType this sentence exactly, then press Enter:\n");
+    println!("  {sentence}\n");
+    print!("Press Enter when you're ready to start... ");
+    io::stdout().flush()?;
+    let mut throwaway = String::new();
+    io::stdin().read_line(&mut throwaway)?;
+
+    let start = Instant::now();
+    let mut typed = String::new();
+    io::stdin().read_line(&mut typed)?;
+    let elapsed = start.elapsed();
+    let typed = typed.trim_end_matches(['\n', '\r']);
+
+    let report = benchmark::score(&sentence, typed, elapsed);
+    report.print(if args.chording { "chorded" } else { "raw" });
+    Ok(())
+}
+
+fn handle_burst(
+    burst: &matcher::BurstResult,
+    dict: &Dictionary,
+    injector: Option<&mut Injector>,
+    quiet: bool,
+) {
     let Some(word) = dict.lookup(&burst.letters) else {
         return;
     };
-    eprintln!(
-        "korder: chord {:?} -> \"{word}\"",
-        sorted_display(&burst.letters)
-    );
+    if !quiet {
+        eprintln!(
+            "korder: chord {:?} -> \"{word}\"",
+            sorted_display(&burst.letters)
+        );
+    }
     if let Some(injector) = injector {
         if let Err(e) = injector.replace(burst.press_count, word) {
             eprintln!("korder: injection failed: {e}");
