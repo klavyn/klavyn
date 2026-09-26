@@ -57,10 +57,11 @@ struct SegmentsArgs {
     #[arg(long, default_value = "about me")]
     phrase: String,
 
-    /// Chord the words instead of typing them. Chord word 1, pause, chord
-    /// word 2, then Return — no manual spaces (korder emits those). The
-    /// pause lets word 1 commit before word 2 starts; without it the two
-    /// chords merge into one unresolvable burst.
+    /// Chord the words instead of typing them. Chord word 1 (press its
+    /// keys together, release), immediately chord word 2, then Return — no
+    /// pause, no manual spaces (korder emits those). Each word commits when
+    /// you release its keys, so fully release word 1 before pressing word 2
+    /// or the two merge into one unresolvable burst.
     #[arg(long)]
     chording: bool,
 
@@ -694,7 +695,7 @@ fn segments_chording(args: &SegmentsArgs, w1: &str, w2: &str) -> anyhow::Result<
     warm_up_listener();
     while seg_rx.try_recv().is_ok() {}
 
-    println!("\nChord \"{w1}\", pause, chord \"{w2}\", then Enter:\n");
+    println!("\nChord \"{w1}\", then \"{w2}\" (no pause), then Enter:\n");
     print!("> ");
     io::stdout().flush()?;
     let mut typed = String::new();
@@ -722,7 +723,7 @@ fn segments_chording(args: &SegmentsArgs, w1: &str, w2: &str) -> anyhow::Result<
     let got: Vec<&str> = chords.iter().map(|(w, ..)| w.as_str()).collect();
     if got != [w1, w2] {
         anyhow::bail!(
-            "expected chords [{w1}, {w2}] but got {got:?} — pause longer between the two chords so the first commits before the second starts, then try again"
+            "expected chords [{w1}, {w2}] but got {got:?} — fully release word 1's keys before pressing word 2 (each word commits on release), then try again"
         );
     }
 
@@ -740,8 +741,15 @@ fn segments_chording(args: &SegmentsArgs, w1: &str, w2: &str) -> anyhow::Result<
 
 /// Chord loop for the segments benchmark: reports each committed matched
 /// chord with its first-key-press and last-key-release instants, plus the
-/// terminating Return. Idle-commits (via a poll tick) so word 1 resolves
-/// during the pause before word 2, rather than merging with it.
+/// terminating Return.
+///
+/// Commits a chord the instant all its keys are released (held goes
+/// empty), not on an idle timeout or a delimiter. That's the natural
+/// boundary for continuous simultaneous chording — release "about",
+/// immediately press "me", no pause anywhere except after Return. (It
+/// assumes each word is pressed as one simultaneous group, so `held`
+/// empties exactly once per word; it does not support rolled/arpeggiated
+/// entry, which the general `run` mode handles instead.)
 fn segments_chord_loop(
     dict: Dictionary,
     roll_gap_ms: u64,
@@ -751,95 +759,44 @@ fn segments_chord_loop(
     let mut buffer = ChordBuffer::new(Duration::from_millis(roll_gap_ms));
     let mut held: HashSet<char> = HashSet::new();
     let mut burst_first: Option<Instant> = None;
-    let mut last_release: Option<Instant> = None;
     let rx = spawn_listener();
-    let tick = Duration::from_millis(50);
-
-    let commit = |buffer: &mut ChordBuffer,
-                  burst: matcher::BurstResult,
-                  burst_first: &mut Option<Instant>,
-                  last_release: &mut Option<Instant>,
-                  injector: &mut Injector,
-                  now: Instant| {
-        let _ = buffer;
-        if let Some(word) = handle_burst(&burst, &dict, Some(injector), true) {
-            let _ = tx.send(SegEvent::Chord {
-                word,
-                first_press: burst_first.unwrap_or(now),
-                last_release: last_release.unwrap_or(now),
-            });
-        }
-        *burst_first = None;
-        *last_release = None;
-    };
-
-    loop {
-        match rx.recv_timeout(tick) {
-            Ok(event) => {
-                let now = Instant::now();
-                match event.event_type {
-                    EventType::KeyPress(key) if key == RdevKey::Return => {
+    for event in rx {
+        let now = Instant::now();
+        match event.event_type {
+            EventType::KeyPress(key) if key == RdevKey::Return => {
+                let _ = tx.send(SegEvent::Return { at: now });
+            }
+            EventType::KeyPress(key) => {
+                if let Some(c) = key_to_letter(key) {
+                    burst_first.get_or_insert(now);
+                    held.insert(c);
+                    buffer.key_down(c, now);
+                }
+            }
+            EventType::KeyRelease(key) => {
+                if let Some(c) = key_to_letter(key) {
+                    buffer.key_up(c, now);
+                    held.remove(&c);
+                    if held.is_empty() {
                         if let Some(burst) = buffer.flush_now() {
-                            commit(
-                                &mut buffer,
-                                burst,
-                                &mut burst_first,
-                                &mut last_release,
-                                &mut injector,
-                                now,
-                            );
-                        }
-                        let _ = tx.send(SegEvent::Return { at: now });
-                    }
-                    EventType::KeyPress(key) => match key_to_letter(key) {
-                        Some(c) => {
-                            burst_first.get_or_insert(now);
-                            held.insert(c);
-                            buffer.key_down(c, now);
-                        }
-                        None => {
-                            if let Some(burst) = buffer.flush_now() {
-                                commit(
-                                    &mut buffer,
-                                    burst,
-                                    &mut burst_first,
-                                    &mut last_release,
-                                    &mut injector,
-                                    now,
-                                );
+                            if let Some(word) =
+                                handle_burst(&burst, &dict, Some(&mut injector), true)
+                            {
+                                let _ = tx.send(SegEvent::Chord {
+                                    word,
+                                    first_press: burst_first.unwrap_or(now),
+                                    last_release: now,
+                                });
                             }
                         }
-                    },
-                    EventType::KeyRelease(key) => {
-                        if let Some(c) = key_to_letter(key) {
-                            buffer.key_up(c, now);
-                            held.remove(&c);
-                            if held.is_empty() {
-                                last_release = Some(now);
-                            }
-                        }
+                        burst_first = None;
                     }
-                    _ => {}
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                let now = Instant::now();
-                if let Some(burst) = buffer.flush_if_idle(now) {
-                    commit(
-                        &mut buffer,
-                        burst,
-                        &mut burst_first,
-                        &mut last_release,
-                        &mut injector,
-                        now,
-                    );
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                anyhow::bail!("listener thread ended unexpectedly");
-            }
+            _ => {}
         }
     }
+    anyhow::bail!("listener thread ended unexpectedly")
 }
 
 /// Resolves and (optionally) injects a committed chord. Returns the
