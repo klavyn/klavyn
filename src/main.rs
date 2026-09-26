@@ -54,6 +54,25 @@ enum Commands {
     /// starts to beat typing. Measures the raw keying gesture, so it needs
     /// no dictionary match — any word works.
     Crossover(CrossoverArgs),
+    /// Produce a whole phrase continuously (all typed, then all chorded)
+    /// and report each word's cost *including the transition into it* — the
+    /// realistic per-word comparison the isolated crossover misses, since
+    /// here a chord's setup time is charged to it as the gap from the
+    /// previous word.
+    Cascade(CascadeArgs),
+}
+
+#[derive(Args, Clone)]
+struct CascadeArgs {
+    /// The phrase to produce. Chord mode presses one key per distinct
+    /// letter of each word, so words with distinct letters compare most
+    /// cleanly.
+    #[arg(long, default_value = "the quick brown fox")]
+    phrase: String,
+
+    /// Valid full-phrase attempts to average per mode.
+    #[arg(long, default_value_t = 5)]
+    trials: u32,
 }
 
 #[derive(Args, Clone)]
@@ -204,6 +223,7 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::Benchmark(args)) => cmd_benchmark(args),
         Some(Commands::Segments(args)) => cmd_segments(args),
         Some(Commands::Crossover(args)) => cmd_crossover(args),
+        Some(Commands::Cascade(args)) => cmd_cascade(args),
         None => run(cli.run_args),
     }
 }
@@ -787,6 +807,252 @@ fn crossover_word(
     Ok(total / n)
 }
 
+/// Produces a whole phrase continuously, all typed then all chorded, and
+/// reports each word's cost including the transition into it. Unlike
+/// `crossover` (which times each word in isolation from a rest position,
+/// so chord setup is free), here word i's cost runs from the *completion*
+/// of word i-1 to the completion of word i — so the time to form word i's
+/// chord after releasing word i-1 is charged to word i, which is what
+/// makes short chords lose in real flowing text.
+fn cmd_cascade(args: CascadeArgs) -> anyhow::Result<()> {
+    let words: Vec<String> = args.phrase.split_whitespace().map(str::to_string).collect();
+    if words.len() < 2 {
+        anyhow::bail!("--phrase needs at least two words");
+    }
+    let n = args.trials.max(1);
+
+    let (tx, rx) = mpsc::channel::<(Instant, EventType)>();
+    std::thread::spawn(move || {
+        let listener = spawn_listener();
+        for event in listener {
+            let at = Instant::now();
+            if tx.send((at, event.event_type)).is_err() {
+                return;
+            }
+        }
+    });
+    warm_up_listener();
+
+    println!("\n--- type the phrase (x{n}) ---");
+    let type_costs = cascade_mode(&rx, &words, false, n)?;
+    println!("\n--- chord the phrase (x{n}) ---");
+    let chord_costs = cascade_mode(&rx, &words, true, n)?;
+
+    println!(
+        "\n=== cascade \"{}\" (N={n}, per-word cost incl. transition in, avg seconds) ===",
+        args.phrase
+    );
+    println!(
+        "{:<10} {:>3} {:>7} {:>7} {:>7} {:>8}",
+        "word", "len", "type", "chord", "faster", "delta"
+    );
+    let mut type_total = Duration::ZERO;
+    let mut chord_total = Duration::ZERO;
+    for (i, word) in words.iter().enumerate() {
+        let t = type_costs[i];
+        let c = chord_costs[i];
+        type_total += t;
+        chord_total += c;
+        let (faster, delta) = if c < t {
+            ("chord", t.saturating_sub(c))
+        } else {
+            ("type", c.saturating_sub(t))
+        };
+        println!(
+            "{word:<10} {:>3} {:>7.3} {:>7.3} {faster:>7} {:>8.3}",
+            word.chars().count(),
+            t.as_secs_f64(),
+            c.as_secs_f64(),
+            delta.as_secs_f64(),
+        );
+    }
+    let (tf, td) = if chord_total < type_total {
+        ("chord", type_total.saturating_sub(chord_total))
+    } else {
+        ("type", chord_total.saturating_sub(type_total))
+    };
+    println!(
+        "{:<10} {:>3} {:>7.3} {:>7.3} {tf:>7} {:>8.3}",
+        "TOTAL",
+        "",
+        type_total.as_secs_f64(),
+        chord_total.as_secs_f64(),
+        td.as_secs_f64(),
+    );
+    Ok(())
+}
+
+/// Averages `n` valid full-phrase attempts, returning the mean per-word
+/// cost vector (one entry per word).
+fn cascade_mode(
+    rx: &mpsc::Receiver<(Instant, EventType)>,
+    words: &[String],
+    chord: bool,
+    n: u32,
+) -> anyhow::Result<Vec<Duration>> {
+    let mode = if chord { "chord" } else { "type" };
+    let phrase = words.join(" ");
+    let mut sums = vec![Duration::ZERO; words.len()];
+    let mut done = 0u32;
+    while done < n {
+        while rx.try_recv().is_ok() {} // clear stale events
+        print!("[{}/{n}] {mode} \"{phrase}\", Enter... ", done + 1);
+        io::stdout().flush()?;
+        let mut typed = String::new();
+        io::stdin().read_line(&mut typed)?;
+        std::thread::sleep(Duration::from_millis(40));
+
+        let mut events: Vec<(Instant, EventType)> = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+
+        let result = if chord {
+            cascade_chord_costs(&events, words)
+        } else {
+            cascade_type_costs(&events, words)
+        };
+        match result {
+            Ok(costs) => {
+                for (s, c) in sums.iter_mut().zip(costs) {
+                    *s += c;
+                }
+                done += 1;
+            }
+            Err(reason) => println!("  {reason} Retrying."),
+        }
+    }
+    Ok(sums.into_iter().map(|s| s / n).collect())
+}
+
+/// Per-word costs for a typed phrase. Word 0's cost is its first letter to
+/// its last letter; word i's cost is word i-1's last letter to word i's
+/// last letter (so the space and the reach into word i count as word i's).
+fn cascade_type_costs(
+    events: &[(Instant, EventType)],
+    words: &[String],
+) -> Result<Vec<Duration>, String> {
+    // Ordered letters (Some) and spaces (None) up to Return.
+    let mut seq: Vec<(Instant, Option<char>)> = Vec::new();
+    let mut saw_return = false;
+    for (at, ev) in events {
+        if let EventType::KeyPress(key) = ev {
+            if *key == RdevKey::Return {
+                saw_return = true;
+                break;
+            } else if *key == RdevKey::Space {
+                seq.push((*at, None));
+            } else if let Some(c) = key_to_letter(*key) {
+                seq.push((*at, Some(c)));
+            }
+        }
+    }
+    if !saw_return {
+        return Err("no Return — press Enter to finish.".to_string());
+    }
+    let expected: Vec<Option<char>> = {
+        let mut e = Vec::new();
+        for (i, w) in words.iter().enumerate() {
+            if i > 0 {
+                e.push(None);
+            }
+            e.extend(w.chars().map(Some));
+        }
+        e
+    };
+    let observed: Vec<Option<char>> = seq.iter().map(|(_, c)| *c).collect();
+    if observed != expected {
+        return Err(format!("didn't match \"{}\" exactly.", words.join(" ")));
+    }
+    // Last-letter instant of each word (the element before each space, and
+    // the final element).
+    let mut word_end: Vec<Instant> = Vec::new();
+    let mut last_letter: Option<Instant> = None;
+    for (at, c) in &seq {
+        match c {
+            Some(_) => last_letter = Some(*at),
+            None => {
+                word_end.push(last_letter.expect("a word precedes each space"));
+            }
+        }
+    }
+    word_end.push(last_letter.expect("phrase ends on a letter"));
+
+    let first = seq[0].0;
+    let mut costs = Vec::with_capacity(words.len());
+    for (i, end) in word_end.iter().enumerate() {
+        let start = if i == 0 { first } else { word_end[i - 1] };
+        costs.push(end.saturating_duration_since(start));
+    }
+    Ok(costs)
+}
+
+/// Per-word costs for a chorded phrase. Each word is one press-release
+/// group (all its distinct-letter keys down, then released). Word 0's cost
+/// is its first press to its last release; word i's cost is word i-1's
+/// last release to word i's last release (so forming word i's chord after
+/// releasing word i-1 counts as word i's).
+fn cascade_chord_costs(
+    events: &[(Instant, EventType)],
+    words: &[String],
+) -> Result<Vec<Duration>, String> {
+    let mut groups: Vec<(std::collections::BTreeSet<char>, Instant, Instant)> = Vec::new();
+    let mut held: HashSet<char> = HashSet::new();
+    let mut cur_letters: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    let mut cur_first: Option<Instant> = None;
+    for (at, ev) in events {
+        match ev {
+            EventType::KeyPress(key) if *key == RdevKey::Return => break,
+            EventType::KeyPress(key) => {
+                if let Some(c) = key_to_letter(*key) {
+                    if cur_letters.is_empty() {
+                        cur_first = Some(*at);
+                    }
+                    held.insert(c);
+                    cur_letters.insert(c);
+                }
+            }
+            EventType::KeyRelease(key) => {
+                if let Some(c) = key_to_letter(*key) {
+                    held.remove(&c);
+                    if held.is_empty() && !cur_letters.is_empty() {
+                        groups.push((
+                            std::mem::take(&mut cur_letters),
+                            cur_first.take().unwrap(),
+                            *at,
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if groups.len() != words.len() {
+        return Err(format!(
+            "got {} chords, expected {} — press each word's keys together and fully release before the next.",
+            groups.len(),
+            words.len()
+        ));
+    }
+    for (group, word) in groups.iter().zip(words) {
+        let want: std::collections::BTreeSet<char> = word.chars().collect();
+        if group.0 != want {
+            return Err(format!(
+                "a chord's keys didn't match a phrase word (got {:?}).",
+                group.0.iter().collect::<String>()
+            ));
+        }
+    }
+
+    let mut costs = Vec::with_capacity(words.len());
+    for (i, group) in groups.iter().enumerate() {
+        let start = if i == 0 { group.1 } else { groups[i - 1].2 };
+        costs.push(group.2.saturating_duration_since(start));
+    }
+    Ok(costs)
+}
+
 #[derive(Copy, Clone)]
 enum Category {
     /// Chord word 1, chord word 2, Return.
@@ -1166,4 +1432,74 @@ fn key_to_letter(key: RdevKey) -> Option<char> {
         _ => return None,
     };
     Some(c)
+}
+
+#[cfg(test)]
+mod cascade_tests {
+    use super::*;
+
+    fn press(key: RdevKey) -> EventType {
+        EventType::KeyPress(key)
+    }
+    fn release(key: RdevKey) -> EventType {
+        EventType::KeyRelease(key)
+    }
+
+    #[test]
+    fn typed_phrase_charges_space_and_reach_to_next_word() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        // "hi ok": h@0, i@100, space@200, o@300, k@400, Return@500
+        let events = vec![
+            (at(0), press(RdevKey::KeyH)),
+            (at(100), press(RdevKey::KeyI)),
+            (at(200), press(RdevKey::Space)),
+            (at(300), press(RdevKey::KeyO)),
+            (at(400), press(RdevKey::KeyK)),
+            (at(500), press(RdevKey::Return)),
+        ];
+        let words = vec!["hi".to_string(), "ok".to_string()];
+        let costs = cascade_type_costs(&events, &words).unwrap();
+        assert_eq!(costs[0], Duration::from_millis(100)); // h..i
+        assert_eq!(costs[1], Duration::from_millis(300)); // i -> k (space + reach + ok)
+    }
+
+    #[test]
+    fn chorded_phrase_charges_next_chord_formation_to_the_next_word() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        // chord "hi": down h@0,i@10, up h@40,i@50 (release-to-empty) -> release@50
+        // chord "ok": down o@200,k@210, up o@240,k@250 -> release@250
+        let events = vec![
+            (at(0), press(RdevKey::KeyH)),
+            (at(10), press(RdevKey::KeyI)),
+            (at(40), release(RdevKey::KeyH)),
+            (at(50), release(RdevKey::KeyI)),
+            (at(200), press(RdevKey::KeyO)),
+            (at(210), press(RdevKey::KeyK)),
+            (at(240), release(RdevKey::KeyO)),
+            (at(250), release(RdevKey::KeyK)),
+            (at(300), press(RdevKey::Return)),
+        ];
+        let words = vec!["hi".to_string(), "ok".to_string()];
+        let costs = cascade_chord_costs(&events, &words).unwrap();
+        assert_eq!(costs[0], Duration::from_millis(50)); // first press -> its release
+        assert_eq!(costs[1], Duration::from_millis(200)); // prev release -> this release (forming ok counts here)
+    }
+
+    #[test]
+    fn chorded_phrase_rejects_wrong_chord_count() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        // Only one chord for a two-word phrase.
+        let events = vec![
+            (at(0), press(RdevKey::KeyH)),
+            (at(10), press(RdevKey::KeyI)),
+            (at(40), release(RdevKey::KeyH)),
+            (at(50), release(RdevKey::KeyI)),
+            (at(300), press(RdevKey::Return)),
+        ];
+        let words = vec!["hi".to_string(), "ok".to_string()];
+        assert!(cascade_chord_costs(&events, &words).is_err());
+    }
 }
