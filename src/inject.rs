@@ -26,4 +26,13 @@ impl Injector {
             .map_err(|e| anyhow::anyhow!("text injection failed: {e}"))?;
         Ok(())
     }
+
+    /// Sends a synthetic Enter/Return press — used to force-submit a
+    /// benchmark drill at a hard time limit instead of waiting on the user
+    /// to press it themselves.
+    pub fn press_enter(&mut self) -> anyhow::Result<()> {
+        self.enigo
+            .key(Key::Return, Click)
+            .map_err(|e| anyhow::anyhow!("enter injection failed: {e}"))
+    }
 }

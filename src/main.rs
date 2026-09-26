@@ -48,17 +48,23 @@ enum Commands {
 #[derive(Args, Clone)]
 struct BenchmarkArgs {
     /// Sentence to type. Defaults to a short built-in sample. Ignored if
-    /// --repeat-word is set.
+    /// --repeat-phrase is set.
     #[arg(long)]
     sentence: Option<String>,
 
-    /// Instead of one fixed sentence, type this one word repeatedly
-    /// (separated by spaces) for a self-timed window — e.g. ~15 seconds —
-    /// then press Enter. Scores correct repetitions and reps/minute,
-    /// rather than matching against a fixed target. Useful for A/B-ing one
-    /// specific chord's comfort in isolation.
+    /// Instead of one fixed sentence, type this phrase (one or more words)
+    /// on repeat until the time limit hits. A multi-word phrase (e.g.
+    /// "about me") forces your fingers to actually move between reps,
+    /// rather than repeating one static hand shape. Scores correct
+    /// repetitions and reps/minute, not a fixed-sentence match.
     #[arg(long)]
-    repeat_word: Option<String>,
+    repeat_phrase: Option<String>,
+
+    /// Hard time limit in seconds for --repeat-phrase: korder injects a
+    /// synthetic Enter at this deadline, so you don't have to self-time
+    /// and remember to stop. Ignored for plain --sentence mode.
+    #[arg(long, default_value_t = 15)]
+    duration_secs: u64,
 
     /// Run korder's chord engine in the background during the timed
     /// attempt, so chording the sentence's words gets corrected live (same
@@ -247,9 +253,11 @@ fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
         println!("(chording OFF — baseline)");
     }
 
-    if let Some(word) = &args.repeat_word {
+    if let Some(phrase) = &args.repeat_phrase {
         println!(
-            "\nType \"{word}\" repeatedly, separated by spaces, for ~15 seconds, then press Enter:\n"
+            "\nType \"{phrase}\" repeatedly, separated by spaces. \
+             Stops itself after {}s — just keep typing until it does:\n",
+            args.duration_secs
         );
     } else {
         println!("\nType this sentence exactly, then press Enter:\n");
@@ -260,6 +268,25 @@ fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
     let mut throwaway = String::new();
     io::stdin().read_line(&mut throwaway)?;
 
+    // For repeat-phrase drills, force-submit at the deadline via a
+    // synthetic Enter, rather than relying on the user to self-time and
+    // remember to stop (which is exactly what produced 23s instead of 15s
+    // in an earlier manual run).
+    if args.repeat_phrase.is_some() {
+        let duration_secs = args.duration_secs;
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(duration_secs));
+            match Injector::new() {
+                Ok(mut injector) => {
+                    if let Err(e) = injector.press_enter() {
+                        eprintln!("korder: couldn't auto-submit: {e}");
+                    }
+                }
+                Err(e) => eprintln!("korder: couldn't auto-submit: {e}"),
+            }
+        });
+    }
+
     let start = Instant::now();
     let mut typed = String::new();
     io::stdin().read_line(&mut typed)?;
@@ -267,8 +294,9 @@ fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
     let typed = typed.trim_end_matches(['\n', '\r']);
 
     let label = if args.chording { "chorded" } else { "raw" };
-    if let Some(word) = &args.repeat_word {
-        benchmark::score_repeated(word, typed, elapsed).print(label);
+    if let Some(phrase) = &args.repeat_phrase {
+        let unit: Vec<&str> = phrase.split_whitespace().collect();
+        benchmark::score_repeated(&unit, typed, elapsed).print(label);
     } else {
         benchmark::score(&sentence, typed, elapsed).print(label);
     }
