@@ -44,10 +44,10 @@ types the matched word instead (via `enigo`).
 A plain keyboard can't sense press *order* or *direction* the way
 CharaChorder's switches can — only *which keys*, as a set. That means
 anagrams are indistinguishable: `stop`, `pots`, `tops`, and `spot` are the
-same chord here. The bundled dictionary (`data/dictionary.csv`) resolves
-every such collision by keeping only the highest-frequency word and
-dropping the rest (see `scripts/build_dictionary.py`) — of an initial
-2,000-word list, 1,776 chords survived.
+same chord here. Each per-language dictionary resolves every such collision
+by keeping only the highest-frequency word and dropping the rest (see
+`scripts/build_dictionary.py`) — of an initial 5,000-word list, 4,112
+English chords and 3,528 French chords survived.
 
 ### Checking your keyboard's rollover ceiling
 
@@ -73,6 +73,36 @@ timing window can occasionally get "corrected" into a chord match you didn't
 intend — that's the `--window-ms` knob to tune. True keystroke suppression
 (via a macOS `CGEventTap`) is a possible v2, not implemented yet.
 
+## Multilingual support
+
+Dictionaries are per-language CSVs built from
+[hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords) —
+one uniform "word count" format covering ~60 languages, already used by
+other input-method/autocomplete projects. `data/dictionary.en.csv` and
+`data/dictionary.fr.csv` ship as examples; pick one with `--dictionary`.
+
+A plain keyboard has no physical key for an accented letter (there's no
+separate key for "é" on any layout — it's a compose/dead-key/AltGr result),
+so chord *detection* folds accents to their base Latin letter
+(`scripts/build_dictionary.py`: NFD-decompose + drop combining marks;
+German `ß` is special-cased to `ss`, since it's a historical ligature, not
+a diacritic). The matched *word* keeps its real spelling — chording `ert`
+in French correctly types `être`, accent intact; only the lookup key is
+folded, not the output.
+
+To add another language:
+
+```sh
+curl -sO "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/<lang>/<lang>_50k.txt"
+python3 scripts/build_dictionary.py <lang>_50k.txt data/dictionary.<lang>.csv
+```
+
+Non-Latin-alphabet languages (Cyrillic, Greek, CJK, ...) aren't handled by
+this pipeline — the whole "press the word's letters at once" model assumes
+a small Latin alphabet mapped onto physical QWERTY keys, which doesn't
+carry over to e.g. CJK scripts. That would need real design work, not just
+a new dictionary file.
+
 ## Setup
 
 ```sh
@@ -97,7 +127,7 @@ cargo run --release
 ```
 
 ```
-korder: loaded 1776 chords from "data/dictionary.csv"
+korder: loaded 4112 chords from "data/dictionary.en.csv"
 korder: listening globally. Ctrl+C to quit.
 korder: chord "klo" -> "look"
 ```

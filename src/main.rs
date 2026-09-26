@@ -42,8 +42,10 @@ enum Commands {
 
 #[derive(Args, Clone)]
 struct RunArgs {
-    /// Path to the chord dictionary CSV (letterset,word,frequency).
-    #[arg(long, default_value = "data/dictionary.csv")]
+    /// Path to the chord dictionary CSV (letterset,word,frequency). See
+    /// data/ for per-language files (dictionary.en.csv, dictionary.fr.csv,
+    /// ...) built by scripts/build_dictionary.py.
+    #[arg(long, default_value = "data/dictionary.en.csv")]
     dictionary: PathBuf,
 
     /// Max gap (ms), while nothing is held, before a new key press starts a
