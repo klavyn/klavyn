@@ -369,21 +369,28 @@ fn cmd_benchmark_trials(args: BenchmarkArgs) -> anyhow::Result<()> {
 
 fn run_raw_trials(word: &str, n: u32) -> anyhow::Result<()> {
     println!("(chording OFF — baseline)");
+
+    // One persistent listener, warmed up once before trial 1. A fresh
+    // rdev::listen() per trial needs a moment to register with the OS, and
+    // firing the first keystroke during that gap dropped it (trial 1's
+    // timing anchored late, collapsing its span toward zero).
+    let (tx, event_rx) = mpsc::channel::<(Instant, EventType)>();
+    std::thread::spawn(move || {
+        let rx = spawn_listener();
+        for event in rx {
+            let at = Instant::now();
+            if tx.send((at, event.event_type)).is_err() {
+                return;
+            }
+        }
+    });
+    warm_up_listener();
+
     let mut trials = Vec::with_capacity(n as usize);
     for i in 1..=n {
+        while event_rx.try_recv().is_ok() {} // discard events from before this trial
         print!("\nTrial {i}/{n}: type \"{word}\", then Enter... ");
         io::stdout().flush()?;
-
-        let (tx, event_rx) = mpsc::channel::<(Instant, EventType)>();
-        std::thread::spawn(move || {
-            let rx = spawn_listener();
-            for event in rx {
-                let at = Instant::now();
-                if tx.send((at, event.event_type)).is_err() {
-                    return;
-                }
-            }
-        });
 
         let mut typed = String::new();
         io::stdin().read_line(&mut typed)?;
@@ -416,6 +423,14 @@ fn run_raw_trials(word: &str, n: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Give a freshly-spawned rdev listener time to register with the OS
+/// before the first timed trial, so an eager first keystroke isn't
+/// dropped. rdev exposes no readiness signal, so a short fixed wait is
+/// the pragmatic guard.
+fn warm_up_listener() {
+    std::thread::sleep(Duration::from_millis(400));
+}
+
 fn run_chorded_trials(args: &BenchmarkArgs, word: &str, n: u32) -> anyhow::Result<()> {
     let mut dict = Dictionary::load(&args.dictionary)?;
     if let Some(abbrev) = &args.abbrev {
@@ -439,6 +454,7 @@ fn run_chorded_trials(args: &BenchmarkArgs, word: &str, n: u32) -> anyhow::Resul
         }
     });
     println!("(chording ON)");
+    warm_up_listener(); // don't let an eager trial-1 chord fire before the engine is live
 
     let mut trials = Vec::with_capacity(n as usize);
     for i in 1..=n {
