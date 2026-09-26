@@ -1,7 +1,5 @@
 mod benchmark;
-mod dictionary;
 mod inject;
-mod matcher;
 
 use std::collections::HashSet;
 use std::io::{self, Write};
@@ -13,9 +11,9 @@ use std::time::{Duration, Instant};
 use clap::{Args, Parser, Subcommand};
 use rdev::{Event, EventType, Key as RdevKey};
 
-use dictionary::Dictionary;
+use acchordion_core::dictionary::Dictionary;
+use acchordion_core::matcher::{self, ChordBuffer};
 use inject::Injector;
-use matcher::ChordBuffer;
 
 /// acchordion: a QWERTY chorded-typing trainer. Press a word's letters at once
 /// or roll through them one at a time (in any order) and acchordion replaces
