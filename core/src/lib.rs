@@ -1,4 +1,4 @@
-//! Pure chord-matching core for acchordion.
+//! Pure chord-matching core for typhony.
 //!
 //! Everything here is OS-independent — no global key capture, no input
 //! injection — so the same logic drives both the native CLI (behind

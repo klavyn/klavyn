@@ -1,14 +1,14 @@
-# acchordion
+# typhony
 
 **Keyboard shortcuts for every language.**
 
 A QWERTY chorded-typing trainer.
 
-Press the letters of a word at once, in any order, and acchordion replaces what you typed with the whole word — the same idea as [CharaChorder](https://www.charachorder.com/), approximated in software on a normal keyboard, with no special hardware required.
+Press the letters of a word at once, in any order, and typhony replaces what you typed with the whole word — the same idea as [CharaChorder](https://www.charachorder.com/), approximated in software on a normal keyboard, with no special hardware required.
 
 Dictionaries ship for many common languages (see [Multilingual support](#multilingual-support)), and the abbreviation tier is meant to grow by community-submitted overrides on top of the standard per-language config, not just the built-in defaults.
 
-See [SECURITY.md](SECURITY.md) before running this: acchordion is, mechanically, a global keylogger, and that document says exactly what it does and doesn't do with that access.
+See [SECURITY.md](SECURITY.md) before running this: typhony is, mechanically, a global keylogger, and that document says exactly what it does and doesn't do with that access.
 
 ## Why
 
@@ -17,17 +17,17 @@ Existing free ways to practice chorded input all teach something slightly differ
 - [Plover](https://www.openstenoproject.org/) teaches real stenography — phonetic, different keys, a different theory entirely.
 - [chordgen](https://github.com/dlip/chordgen) teaches a single-seed-letter plus thumb-modifier scheme.
 
-acchordion teaches the actual thing: press a word's letters together, get the word.
+typhony teaches the actual thing: press a word's letters together, get the word.
 If you later buy a CharaChorder, the skill should transfer directly.
 
 ## How it works
 
-acchordion listens globally for key presses (via `rdev`) and can recognize a chord two ways:
+typhony listens globally for key presses (via `rdev`) and can recognize a chord two ways:
 
 - **Held together** — press several letters at once, release them.
-- **Arpeggiated / rolled** — press and release letters one at a time (or a couple at once), as long as each new press starts within `--roll-gap-ms` (default 200ms) of the keyboard last going idle. This is what makes long chords work on ordinary hardware: your keyboard's simultaneous-key ceiling (commonly 6 on non-NKRO boards — run `acchordion detect-rollover` to measure yours) only limits how many keys you can hold at *one instant*. Rolling through a 7+ letter word one or two keys at a time never asks for more than that, so it works regardless of the ceiling.
+- **Arpeggiated / rolled** — press and release letters one at a time (or a couple at once), as long as each new press starts within `--roll-gap-ms` (default 200ms) of the keyboard last going idle. This is what makes long chords work on ordinary hardware: your keyboard's simultaneous-key ceiling (commonly 6 on non-NKRO boards — run `typhony detect-rollover` to measure yours) only limits how many keys you can hold at *one instant*. Rolling through a 7+ letter word one or two keys at a time never asks for more than that, so it works regardless of the ceiling.
 
-Either way, once the chord's letters are known, acchordion checks them against its dictionary and, on a match, backspaces what you literally typed and types the matched word instead (via `enigo`).
+Either way, once the chord's letters are known, typhony checks them against its dictionary and, on a match, backspaces what you literally typed and types the matched word instead (via `enigo`).
 
 ### A fundamental limitation, by design
 
@@ -41,13 +41,13 @@ Each per-language dictionary resolves every such collision by keeping only the h
 cargo run -- detect-rollover
 ```
 
-Hold down as many different letter keys as you can for a few seconds; acchordion reports the max it saw.
+Hold down as many different letter keys as you can for a few seconds; typhony reports the max it saw.
 This is purely informational — the roll/arpeggiate matching above works regardless of the result — but it tells you which words you'll need to roll rather than hold.
-This measures what your OS/keyboard combo actually delivers end-to-end (via the same `rdev` listener acchordion itself uses), rather than a theoretical spec-sheet number from a USB descriptor that might not survive OS-level coalescing anyway.
+This measures what your OS/keyboard combo actually delivers end-to-end (via the same `rdev` listener typhony itself uses), rather than a theoretical spec-sheet number from a USB descriptor that might not survive OS-level coalescing anyway.
 
 ### v1 doesn't suppress the original keystrokes
 
-acchordion lets your OS type the individual letters normally, then corrects them after the fact (backspace + retype), the same way autocorrect works.
+typhony lets your OS type the individual letters normally, then corrects them after the fact (backspace + retype), the same way autocorrect works.
 This means genuinely fast sequential typing that happens to land within the roll-gap window can occasionally get "corrected" into a chord match you didn't intend — that's the `--roll-gap-ms` knob to tune.
 True keystroke suppression (via a macOS `CGEventTap`) is a possible v2, not implemented yet.
 
@@ -75,7 +75,7 @@ That would need real design work, not just a new dictionary file.
 cargo build --release
 ```
 
-On macOS, acchordion needs two permissions, granted the first time you run it (System Settings → Privacy & Security):
+On macOS, typhony needs two permissions, granted the first time you run it (System Settings → Privacy & Security):
 
 - **Input Monitoring** — to listen for key presses globally.
 - **Accessibility** — to inject the backspace/retype correction. Not needed in `--dry-run` mode.
@@ -94,9 +94,9 @@ cargo run --release -- --quiet
 ```
 
 ```
-acchordion: loaded 4112 chords from "data/dictionary.en.csv"
-acchordion: listening globally (roll gap 200ms). Ctrl+C to quit.
-acchordion: chord "klo" -> "look"
+typhony: loaded 4112 chords from "data/dictionary.en.csv"
+typhony: listening globally (roll gap 200ms). Ctrl+C to quit.
+typhony: chord "klo" -> "look"
 ```
 
 ## Benchmarking
@@ -124,7 +124,7 @@ Known gaps to expect, not yet confirmed either way:
 
 - **Linux/Wayland**: `rdev`'s Linux backend targets X11; Wayland sessions are a known weak spot for this whole category of global-input-hook crate, not just here.
 - **Permission models differ per OS**: macOS needs Input Monitoring + Accessibility (TCC prompts, as documented above); Linux typically needs either running as a user in the `input` group or appropriate udev rules for raw input access; Windows generally works out of the box via global hooks, no special grant needed.
-- The `Key` enum and chord-matching logic (`key_to_letter`, `matcher.rs`) are already OS-agnostic — cross-platform support is really a question of `rdev`/`enigo`'s own backend maturity per OS, not anything acchordion-specific.
+- The `Key` enum and chord-matching logic (`key_to_letter`, `matcher.rs`) are already OS-agnostic — cross-platform support is really a question of `rdev`/`enigo`'s own backend maturity per OS, not anything typhony-specific.
 
 ## Status
 

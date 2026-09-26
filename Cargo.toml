@@ -5,15 +5,15 @@ members = ["core", "wasm"]
 default-members = [".", "core"]
 
 [package]
-name = "acchordion"
+name = "typhony"
 version = "0.1.0"
 edition = "2024"
 description = "A QWERTY chorded-typing trainer: press a word's letters at once, get the word."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/nickvigilante/acchordion"
+repository = "https://github.com/nickvigilante/typhony"
 
 [dependencies]
-acchordion-core = { path = "core" }
+typhony-core = { path = "core" }
 rdev = "0.5"
 enigo = "0.6"
 clap = { version = "4", features = ["derive"] }

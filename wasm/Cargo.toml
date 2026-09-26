@@ -1,16 +1,16 @@
 [package]
-name = "acchordion-wasm"
+name = "typhony-wasm"
 version = "0.1.0"
 edition = "2024"
-description = "WASM bindings for acchordion-core: in-browser chord lookup for the demo site."
+description = "WASM bindings for typhony-core: in-browser chord lookup for the demo site."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/nickvigilante/acchordion"
+repository = "https://github.com/nickvigilante/typhony"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-acchordion-core = { path = "../core" }
+typhony-core = { path = "../core" }
 wasm-bindgen = "0.2"
 
 [dependencies.web-sys]
