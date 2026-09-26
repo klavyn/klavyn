@@ -605,29 +605,6 @@ fn segments_typing(w1: &str, w2: &str) -> anyhow::Result<()> {
         }
     });
     warm_up_listener();
-    while event_rx.try_recv().is_ok() {}
-
-    println!("\nType \"{w1} {w2}\", then Enter:\n");
-    print!("> ");
-    io::stdout().flush()?;
-    let mut typed = String::new();
-    io::stdin().read_line(&mut typed)?;
-    std::thread::sleep(Duration::from_millis(30));
-
-    // Ordered press instants, classified into letters / space / return.
-    let mut letters_and_space: Vec<(Instant, Option<char>)> = Vec::new(); // None = space
-    let mut ret: Option<Instant> = None;
-    while let Ok((at, event_type)) = event_rx.try_recv() {
-        if let EventType::KeyPress(key) = event_type {
-            if key == RdevKey::Return {
-                ret.get_or_insert(at);
-            } else if key == RdevKey::Space {
-                letters_and_space.push((at, None));
-            } else if let Some(c) = key_to_letter(key) {
-                letters_and_space.push((at, Some(c)));
-            }
-        }
-    }
 
     let expected: Vec<Option<char>> = w1
         .chars()
@@ -635,28 +612,57 @@ fn segments_typing(w1: &str, w2: &str) -> anyhow::Result<()> {
         .chain(std::iter::once(None))
         .chain(w2.chars().map(Some))
         .collect();
-    let observed: Vec<Option<char>> = letters_and_space.iter().map(|(_, c)| *c).collect();
-    let Some(ret) = ret else {
-        anyhow::bail!("no Return seen — did you press Enter?");
-    };
-    if observed != expected {
-        anyhow::bail!(
-            "keystrokes didn't match \"{w1} {w2}\" exactly (segment boundaries need a clean attempt) — try again"
-        );
-    }
-
     let i_space = w1.chars().count();
-    let report = benchmark::SegmentReport::typing(
-        w1,
-        w2,
-        letters_and_space[0].0,           // w1 first letter
-        letters_and_space[i_space - 1].0, // w1 last letter
-        letters_and_space[i_space].0,     // space
-        letters_and_space[i_space + 1].0, // w2 first letter
-        ret,
-    );
-    report.print("typing");
-    Ok(())
+
+    loop {
+        while event_rx.try_recv().is_ok() {} // clear stale events before this attempt
+
+        println!("\nType \"{w1} {w2}\", then Enter:\n");
+        print!("> ");
+        io::stdout().flush()?;
+        let mut typed = String::new();
+        io::stdin().read_line(&mut typed)?;
+        std::thread::sleep(Duration::from_millis(30));
+
+        // Ordered press instants, classified into letters / space / return.
+        let mut letters_and_space: Vec<(Instant, Option<char>)> = Vec::new(); // None = space
+        let mut ret: Option<Instant> = None;
+        while let Ok((at, event_type)) = event_rx.try_recv() {
+            if let EventType::KeyPress(key) = event_type {
+                if key == RdevKey::Return {
+                    ret.get_or_insert(at);
+                } else if key == RdevKey::Space {
+                    letters_and_space.push((at, None));
+                } else if let Some(c) = key_to_letter(key) {
+                    letters_and_space.push((at, Some(c)));
+                }
+            }
+        }
+
+        let observed: Vec<Option<char>> = letters_and_space.iter().map(|(_, c)| *c).collect();
+        if ret.is_none() {
+            println!("  no Return seen — press Enter to finish. Retrying.");
+            continue;
+        }
+        if observed != expected {
+            println!(
+                "  keystrokes didn't match \"{w1} {w2}\" exactly (a typo or backspace makes the boundaries meaningless). Retrying."
+            );
+            continue;
+        }
+
+        benchmark::SegmentReport::typing(
+            w1,
+            w2,
+            letters_and_space[0].0,           // w1 first letter
+            letters_and_space[i_space - 1].0, // w1 last letter
+            letters_and_space[i_space].0,     // space
+            letters_and_space[i_space + 1].0, // w2 first letter
+            ret.unwrap(),
+        )
+        .print("typing");
+        return Ok(());
+    }
 }
 
 /// A chord commit (or the terminating Return) reported by the segments
@@ -683,60 +689,70 @@ fn segments_chording(args: &SegmentsArgs, w1: &str, w2: &str) -> anyhow::Result<
     if dict.is_empty() {
         anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
     }
-    let injector = Injector::new()?;
     let roll_gap_ms = args.roll_gap_ms;
     let (tx, seg_rx) = mpsc::channel::<SegEvent>();
+    // No injector: the segments benchmark only needs to detect which word
+    // each chord resolves to and its key timing, not correct the screen.
+    // Skipping injection also removes a race where the synchronous
+    // backspace/retype blocked the loop thread mid-attempt and bunched the
+    // timestamps of the keys that queued behind it.
     std::thread::spawn(move || {
-        if let Err(e) = segments_chord_loop(dict, roll_gap_ms, injector, tx) {
+        if let Err(e) = segments_chord_loop(dict, roll_gap_ms, tx) {
             eprintln!("korder: chord engine stopped: {e}");
         }
     });
     println!("(chording)");
     warm_up_listener();
-    while seg_rx.try_recv().is_ok() {}
 
-    println!("\nChord \"{w1}\", then \"{w2}\" (no pause), then Enter:\n");
-    print!("> ");
-    io::stdout().flush()?;
-    let mut typed = String::new();
-    io::stdin().read_line(&mut typed)?;
-    std::thread::sleep(Duration::from_millis(80)); // let the Return-triggered commit report
+    loop {
+        while seg_rx.try_recv().is_ok() {} // clear stale events before this attempt
 
-    let mut chords: Vec<(String, Instant, Instant)> = Vec::new();
-    let mut ret: Option<Instant> = None;
-    while let Ok(ev) = seg_rx.try_recv() {
-        match ev {
-            SegEvent::Chord {
-                word,
-                first_press,
-                last_release,
-            } => chords.push((word, first_press, last_release)),
-            SegEvent::Return { at } => {
-                ret.get_or_insert(at);
+        println!("\nChord \"{w1}\", then \"{w2}\" (no pause), then Enter:\n");
+        print!("> ");
+        io::stdout().flush()?;
+        let mut typed = String::new();
+        io::stdin().read_line(&mut typed)?;
+        std::thread::sleep(Duration::from_millis(80)); // let the Return-triggered commit report
+
+        let mut chords: Vec<(String, Instant, Instant)> = Vec::new();
+        let mut ret: Option<Instant> = None;
+        while let Ok(ev) = seg_rx.try_recv() {
+            match ev {
+                SegEvent::Chord {
+                    word,
+                    first_press,
+                    last_release,
+                } => chords.push((word, first_press, last_release)),
+                SegEvent::Return { at } => {
+                    ret.get_or_insert(at);
+                }
             }
         }
-    }
 
-    let Some(ret) = ret else {
-        anyhow::bail!("no Return seen — did you press Enter?");
-    };
-    let got: Vec<&str> = chords.iter().map(|(w, ..)| w.as_str()).collect();
-    if got != [w1, w2] {
-        anyhow::bail!(
-            "expected chords [{w1}, {w2}] but got {got:?} — fully release word 1's keys before pressing word 2 (each word commits on release), then try again"
-        );
-    }
+        let got: Vec<&str> = chords.iter().map(|(w, ..)| w.as_str()).collect();
+        if ret.is_none() {
+            println!("  no Return seen — press Enter to finish the attempt. Retrying.");
+            continue;
+        }
+        if got != [w1, w2] {
+            println!(
+                "  got {got:?}, expected [{w1}, {w2}]. Press each word's keys together as one \
+                 chord (a rolled 2-key word like \"me\" splits into misses). Retrying."
+            );
+            continue;
+        }
 
-    let report = benchmark::SegmentReport::chording(
-        w1,
-        w2,
-        chords[0].1, // w1 first press
-        chords[0].2, // w1 last release
-        chords[1].1, // w2 first press
-        ret,
-    );
-    report.print("chording");
-    Ok(())
+        benchmark::SegmentReport::chording(
+            w1,
+            w2,
+            chords[0].1,  // w1 first press
+            chords[0].2,  // w1 last release
+            chords[1].1,  // w2 first press
+            ret.unwrap(), // Return
+        )
+        .print("chording");
+        return Ok(());
+    }
 }
 
 /// Chord loop for the segments benchmark: reports each committed matched
@@ -753,7 +769,6 @@ fn segments_chording(args: &SegmentsArgs, w1: &str, w2: &str) -> anyhow::Result<
 fn segments_chord_loop(
     dict: Dictionary,
     roll_gap_ms: u64,
-    mut injector: Injector,
     tx: mpsc::Sender<SegEvent>,
 ) -> anyhow::Result<()> {
     let mut buffer = ChordBuffer::new(Duration::from_millis(roll_gap_ms));
@@ -779,9 +794,7 @@ fn segments_chord_loop(
                     held.remove(&c);
                     if held.is_empty() {
                         if let Some(burst) = buffer.flush_now() {
-                            if let Some(word) =
-                                handle_burst(&burst, &dict, Some(&mut injector), true)
-                            {
+                            if let Some(word) = handle_burst(&burst, &dict, None, true) {
                                 let _ = tx.send(SegEvent::Chord {
                                     word,
                                     first_press: burst_first.unwrap_or(now),
