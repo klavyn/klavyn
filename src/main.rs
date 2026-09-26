@@ -65,6 +65,22 @@ enum Commands {
     /// release (no artificial delay), so you can fire the next chord
     /// immediately — pushing chording toward its speed ceiling.
     Race(RaceArgs),
+    /// Autonomous timing-resolution self-test: inject key pairs at known
+    /// gaps and measure the observed delta, to characterize the smallest
+    /// difference between two presses this tool can actually resolve (the
+    /// jitter floor under all the other benchmarks). No typing needed.
+    Resolution(ResolutionArgs),
+}
+
+#[derive(Args, Clone)]
+struct ResolutionArgs {
+    /// Injected gaps to test, in milliseconds, space-separated.
+    #[arg(long, default_value = "0 1 2 5 10 20")]
+    gaps_ms: String,
+
+    /// Pairs to inject per gap.
+    #[arg(long, default_value_t = 50)]
+    samples: u32,
 }
 
 #[derive(Args, Clone)]
@@ -256,6 +272,7 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::Crossover(args)) => cmd_crossover(args),
         Some(Commands::Cascade(args)) => cmd_cascade(args),
         Some(Commands::Race(args)) => cmd_race(args),
+        Some(Commands::Resolution(args)) => cmd_resolution(args),
         None => run(cli.run_args),
     }
 }
@@ -1309,6 +1326,104 @@ fn cmd_race(args: RaceArgs) -> anyhow::Result<()> {
     println!("reps/sec:  {per_sec:.2}");
     println!("words/min: {:.0}", per_sec * 60.0);
     Ok(())
+}
+
+/// Injects Space+Backspace pairs at a series of known gaps and measures
+/// the observed delta between the two presses as the listener sees them.
+/// The spread (std dev) at a fixed gap is the tool's timing-resolution
+/// floor: two real presses closer together than that can't be reliably
+/// distinguished, which bounds how much to trust the sub-10ms numbers in
+/// the other benchmarks. The space is deleted by the backspace, so the
+/// terminal line stays net-neutral.
+fn cmd_resolution(args: ResolutionArgs) -> anyhow::Result<()> {
+    let gaps: Vec<u64> = args
+        .gaps_ms
+        .split_whitespace()
+        .filter_map(|t| t.parse().ok())
+        .collect();
+    if gaps.is_empty() {
+        anyhow::bail!("--gaps-ms had no valid numbers");
+    }
+    let samples = args.samples.max(1);
+
+    let (tx, rx) = mpsc::channel::<(Instant, EventType)>();
+    std::thread::spawn(move || {
+        let listener = spawn_listener();
+        for event in listener {
+            let at = Instant::now();
+            if tx.send((at, event.event_type)).is_err() {
+                return;
+            }
+        }
+    });
+    let mut inj = Injector::new()?;
+    warm_up_listener();
+
+    eprintln!("Injecting {samples} Space+Backspace pairs per gap. Don't type during the test.");
+    println!("\n=== timing resolution (injected pairs, N={samples} each, ms) ===");
+    println!(
+        "{:>9} {:>8} {:>8} {:>8} {:>8} {:>6}",
+        "gap", "mean", "stddev", "min", "max", "got"
+    );
+
+    for gap in &gaps {
+        let mut deltas: Vec<f64> = Vec::new();
+        for _ in 0..samples {
+            while rx.try_recv().is_ok() {} // clear before this pair
+            inj.press_space()?;
+            if *gap > 0 {
+                std::thread::sleep(Duration::from_millis(*gap));
+            }
+            inj.press_backspace()?;
+            std::thread::sleep(Duration::from_millis(30)); // let both arrive
+
+            let mut space_at: Option<Instant> = None;
+            let mut back_at: Option<Instant> = None;
+            while let Ok((at, ev)) = rx.try_recv() {
+                if let EventType::KeyPress(key) = ev {
+                    match key {
+                        RdevKey::Space => {
+                            space_at.get_or_insert(at);
+                        }
+                        RdevKey::Backspace => {
+                            back_at.get_or_insert(at);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if let (Some(s), Some(b)) = (space_at, back_at) {
+                deltas.push(b.saturating_duration_since(s).as_secs_f64() * 1000.0);
+            }
+            std::thread::sleep(Duration::from_millis(15)); // separate pairs
+        }
+        print_resolution_row(*gap, &deltas);
+    }
+
+    println!(
+        "\nRule of thumb: two presses closer than roughly the stddev at gap 0 are within the noise floor."
+    );
+    Ok(())
+}
+
+fn print_resolution_row(gap: u64, deltas: &[f64]) {
+    if deltas.is_empty() {
+        println!(
+            "{gap:>7}ms {:>8} {:>8} {:>8} {:>8} {:>6}",
+            "-", "-", "-", "-", 0
+        );
+        return;
+    }
+    let n = deltas.len() as f64;
+    let mean = deltas.iter().sum::<f64>() / n;
+    let var = deltas.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / n;
+    let stddev = var.sqrt();
+    let min = deltas.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max = deltas.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    println!(
+        "{gap:>7}ms {mean:>8.3} {stddev:>8.3} {min:>8.3} {max:>8.3} {:>6}",
+        deltas.len()
+    );
 }
 
 #[derive(Copy, Clone)]

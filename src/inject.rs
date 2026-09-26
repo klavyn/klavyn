@@ -43,4 +43,12 @@ impl Injector {
             .key(Key::Space, Click)
             .map_err(|e| anyhow::anyhow!("space injection failed: {e}"))
     }
+
+    /// Sends a synthetic Backspace press. Paired with press_space in the
+    /// resolution test (the space it deletes keeps the line net-neutral).
+    pub fn press_backspace(&mut self) -> anyhow::Result<()> {
+        self.enigo
+            .key(Key::Backspace, Click)
+            .map_err(|e| anyhow::anyhow!("backspace injection failed: {e}"))
+    }
 }
