@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>klavyn — chorded typing for every language</title>
+<meta name="description" content="Press a word's letters at once, in any order, and klavyn types the whole word. A QWERTY chorded-typing trainer. Local, private, open source." />
+<meta property="og:title" content="klavyn" />
+<meta property="og:description" content="Chorded typing on a normal keyboard. Press a word's letters at once, get the word." />
+<meta property="og:type" content="website" />
+<meta name="theme-color" content="#080b14" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* cool palette — dark first */
+    --bg: #080b14;
+    --bg-2: #0b1020;
+    --surface: #111a2b;
+    --surface-2: #16223a;
+    --border: #1e2c44;
+    --border-bright: #294066;
+    --text: #e7eef9;
+    --muted: #93a2be;
+    --faint: #64748f;
+
+    --cyan: #34e0e6;
+    --teal: #2cd4c0;
+    --blue: #4c7df7;
+    --indigo: #6e75f6;
+    --violet: #a98bfb;
+    --purple: #c77dff;
+
+    --k: var(--cyan);
+    --v: var(--violet);
+    --grad: linear-gradient(120deg, var(--cyan) 0%, var(--blue) 42%, var(--violet) 78%, var(--purple) 100%);
+    --grad-soft: linear-gradient(120deg, rgba(52,224,230,.16), rgba(169,139,251,.16));
+
+    --radius: 14px;
+    --maxw: 1080px;
+    --shadow: 0 24px 60px -24px rgba(3, 8, 20, .8);
+    --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --font-sans: "Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f3f7fd;
+      --bg-2: #eaf1fb;
+      --surface: #ffffff;
+      --surface-2: #f4f8ff;
+      --border: #dbe6f5;
+      --border-bright: #c3d4ec;
+      --text: #0d1526;
+      --muted: #4b5b76;
+      --faint: #7b8aa5;
+      --cyan: #0aa9c2;
+      --teal: #12a394;
+      --blue: #3355fd;
+      --indigo: #4f52e6;
+      --violet: #7c3aed;
+      --purple: #9333ea;
+      --shadow: 0 24px 60px -30px rgba(30, 60, 120, .35);
+    }
+  }
+  :root[data-theme="dark"] { color-scheme: dark; }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 600px at 50% -10%, rgba(76,125,247,.18), transparent 60%),
+      radial-gradient(900px 500px at 85% 10%, rgba(199,125,255,.12), transparent 55%),
+      radial-gradient(700px 500px at 10% 20%, rgba(52,224,230,.10), transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+  a { color: var(--cyan); text-decoration: none; }
+  a:hover { color: var(--text); }
+
+  .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 20px; }
+
+  /* wordmark */
+  .wm { font-family: var(--font-mono); font-weight: 800; letter-spacing: -.02em; color: var(--text); }
+  .wm .k { color: var(--k); }
+  .wm .v { color: var(--v); }
+
+  /* nav */
+  header.nav {
+    position: sticky; top: 0; z-index: 40;
+    backdrop-filter: blur(12px);
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-in { display: flex; align-items: center; justify-content: space-between; height: 62px; }
+  .brand { font-family: var(--font-mono); font-weight: 800; font-size: 20px; letter-spacing: -.02em; }
+  .brand .k { color: var(--k); }
+  .brand .v { color: var(--v); }
+  nav.links { display: flex; align-items: center; gap: 6px; }
+  nav.links a {
+    font-family: var(--font-mono); font-size: 13.5px; font-weight: 500;
+    color: var(--muted); padding: 8px 12px; border-radius: 9px;
+  }
+  nav.links a:hover { color: var(--text); background: var(--surface); }
+  nav.links a.gh { color: var(--text); border: 1px solid var(--border-bright); }
+
+  /* hero */
+  .hero { position: relative; padding: 96px 0 40px; text-align: center; }
+  .hero .glow {
+    position: absolute; inset: -10% 0 auto 0; height: 420px; margin: auto;
+    background: var(--grad); filter: blur(90px); opacity: .22; z-index: 0;
+    border-radius: 50%; max-width: 720px; left: 0; right: 0;
+    pointer-events: none;
+  }
+  .hero-inner { position: relative; z-index: 1; }
+  .eyebrow {
+    display: inline-block; font-family: var(--font-mono); font-size: 12.5px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--muted);
+    border: 1px solid var(--border-bright); border-radius: 999px; padding: 6px 14px; margin-bottom: 26px;
+    background: var(--surface);
+  }
+  .eyebrow b { color: var(--teal); font-weight: 700; }
+  .hero .wm-big {
+    font-size: clamp(58px, 15vw, 148px); line-height: .9; margin: 0;
+    text-shadow: 0 0 60px rgba(76,125,247,.25);
+  }
+  .hero .wm-big .k { text-shadow: 0 0 34px color-mix(in srgb, var(--cyan) 60%, transparent); }
+  .hero .wm-big .v { text-shadow: 0 0 34px color-mix(in srgb, var(--violet) 60%, transparent); }
+  .tagline { font-size: clamp(20px, 3.4vw, 28px); font-weight: 600; margin: 30px auto 10px; max-width: 640px; }
+  .sub { color: var(--muted); font-size: 17px; max-width: 600px; margin: 0 auto; }
+  .sub code { font-family: var(--font-mono); color: var(--text); background: var(--surface); padding: 1px 6px; border-radius: 6px; font-size: 14.5px; }
+
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin: 36px 0 8px; }
+  .btn {
+    font-family: var(--font-mono); font-weight: 700; font-size: 14.5px;
+    padding: 13px 22px; border-radius: 11px; cursor: pointer; border: 1px solid transparent;
+    display: inline-flex; align-items: center; gap: 9px; transition: transform .12s ease, box-shadow .2s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { color: #04121c; background: var(--grad); box-shadow: 0 12px 30px -10px rgba(76,125,247,.6); }
+  .btn-primary:hover { color: #04121c; box-shadow: 0 16px 40px -10px rgba(169,139,251,.7); }
+  .btn-ghost { color: var(--text); border-color: var(--border-bright); background: var(--surface); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--cyan); }
+
+  /* install strip */
+  .install { max-width: 640px; margin: 30px auto 0; }
+  .cmd {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    font-family: var(--font-mono); font-size: 14.5px;
+    background: var(--surface); border: 1px solid var(--border-bright); border-radius: 12px;
+    padding: 14px 16px; text-align: left; box-shadow: var(--shadow);
+  }
+  .cmd .code { overflow-x: auto; white-space: nowrap; }
+  .cmd .prompt { color: var(--teal); user-select: none; }
+  .cmd .code b { color: var(--cyan); font-weight: 700; }
+  .copy {
+    font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--muted);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 11px; cursor: pointer; flex: none; transition: color .15s, border-color .15s;
+  }
+  .copy:hover { color: var(--text); border-color: var(--cyan); }
+  .copy.done { color: var(--teal); border-color: var(--teal); }
+  .cmd-note { font-family: var(--font-mono); font-size: 12px; color: var(--faint); text-align: center; margin-top: 10px; }
+
+  /* demo */
+  section.demo { padding: 64px 0 24px; }
+  .demo-card {
+    max-width: 720px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 18px; padding: 40px 28px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+  }
+  .demo-card::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: var(--grad); opacity: .8; }
+  .demo-label { font-family: var(--font-mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); text-align: center; margin-bottom: 26px; }
+  .keys { display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; }
+  .key {
+    font-family: var(--font-mono); font-weight: 700; font-size: 26px; width: 62px; height: 62px;
+    display: grid; place-items: center; border-radius: 12px;
+    background: var(--surface-2); border: 1px solid var(--border-bright); color: var(--text);
+    box-shadow: inset 0 -3px 0 rgba(0,0,0,.25);
+  }
+  .key.lit { border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 22px -4px var(--cyan), inset 0 -3px 0 rgba(0,0,0,.25); }
+  .key.lit.v { border-color: var(--violet); color: var(--violet); box-shadow: 0 0 22px -4px var(--violet), inset 0 -3px 0 rgba(0,0,0,.25); }
+  .arrow { font-family: var(--font-mono); font-size: 26px; color: var(--faint); }
+  .out {
+    font-family: var(--font-mono); font-weight: 800; font-size: 30px; padding: 0 22px; height: 62px;
+    display: grid; place-items: center; border-radius: 12px; color: var(--text);
+    background: var(--grad-soft); border: 1px solid var(--border-bright);
+  }
+  .demo-sub { text-align: center; color: var(--muted); font-size: 15px; margin-top: 24px; }
+
+  /* features */
+  section.features { padding: 64px 0 40px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 26px 22px; transition: border-color .2s, transform .12s;
+  }
+  .card:hover { border-color: var(--border-bright); transform: translateY(-2px); }
+  .card .ic { font-family: var(--font-mono); font-weight: 800; font-size: 20px; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 11px; background: var(--grad-soft); margin-bottom: 16px; }
+  .card h3 { margin: 0 0 8px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .c-cyan .ic { color: var(--cyan); } .c-blue .ic { color: var(--blue); } .c-violet .ic { color: var(--violet); }
+
+  /* footer */
+  footer { border-top: 1px solid var(--border); margin-top: 48px; padding: 40px 0 60px; }
+  .foot-in { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  .foot-links { display: flex; gap: 20px; flex-wrap: wrap; font-family: var(--font-mono); font-size: 13px; }
+  .foot-links a { color: var(--muted); } .foot-links a:hover { color: var(--text); }
+  .foot-note { color: var(--faint); font-size: 13px; font-family: var(--font-mono); }
+
+  @media (max-width: 720px) {
+    .grid { grid-template-columns: 1fr; }
+    .hero { padding: 64px 0 24px; }
+    nav.links a:not(.gh) { display: none; }
+    .out { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-in">
+      <span class="brand"><span class="k">k</span>la<span class="v">v</span>yn</span>
+      <nav class="links">
+        <a href="/docs">Docs</a>
+        <a href="/learn">Learn</a>
+        <a href="#install">Download</a>
+        <a class="gh" href="https://github.com/nickvigilante/klavyn">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="glow"></div>
+      <div class="wrap hero-inner">
+        <span class="eyebrow">Chorded typing · <b>no special hardware</b></span>
+        <h1 class="wm wm-big"><span class="k">k</span>la<span class="v">v</span>yn</h1>
+        <p class="tagline">Press a word's letters at once — get the whole word.</p>
+        <p class="sub">A QWERTY chorded-typing trainer. Hold or roll the letters in <em>any</em> order; klavyn recognizes the chord and types the word. The <a href="https://www.charachorder.com/">CharaChorder</a> idea, in software, on the keyboard you already have.</p>
+
+        <div class="cta">
+          <a class="btn btn-primary" href="#install">▸ Install klavyn</a>
+          <a class="btn btn-ghost" href="/docs">Read the docs</a>
+        </div>
+
+        <div class="install" id="install">
+          <div class="cmd">
+            <span class="code"><span class="prompt">$ </span>curl -fsSL <b>https://klavyn.app/install.sh</b> | sh</span>
+            <button class="copy" id="copyBtn" aria-label="Copy install command">Copy</button>
+          </div>
+          <p class="cmd-note">macOS &amp; Linux · or <code style="font-family:var(--font-mono)">cargo install klavyn</code> · <a href="/download">other ways to install →</a></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="demo">
+      <div class="wrap">
+        <div class="demo-card">
+          <p class="demo-label">what a chord looks like</p>
+          <div class="keys">
+            <span class="key lit">k</span>
+            <span class="key lit">l</span>
+            <span class="key lit">o</span>
+            <span class="arrow">→</span>
+            <span class="out">look</span>
+          </div>
+          <p class="demo-sub">Three keys, pressed together or rolled fast — one word out. No seed letters, no separate theory to learn: just the word's own letters.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="features">
+      <div class="wrap">
+        <div class="grid">
+          <div class="card c-cyan">
+            <div class="ic">⇄</div>
+            <h3>Hold <em>or</em> roll</h3>
+            <p>Mash the letters at once, or roll through them one at a time within the roll-gap window. Long words work even on keyboards with a low simultaneous-key ceiling.</p>
+          </div>
+          <div class="card c-blue">
+            <div class="ic">文</div>
+            <h3>Every language</h3>
+            <p>Dictionaries ship for many languages, with a community-extensible abbreviation tier layered on top of the per-language defaults.</p>
+          </div>
+          <div class="card c-violet">
+            <div class="ic">◈</div>
+            <h3>Local &amp; private</h3>
+            <p>Everything runs on your machine. No network calls, no disk writes of what you type. It's open source — read <a href="https://github.com/nickvigilante/klavyn/blob/main/SECURITY.md">SECURITY.md</a> and verify.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot-in">
+      <span class="brand" style="font-size:17px"><span class="k">k</span>la<span class="v">v</span>yn</span>
+      <div class="foot-links">
+        <a href="/docs">Docs</a>
+        <a href="/learn">Learn</a>
+        <a href="/download">Download</a>
+        <a href="https://github.com/nickvigilante/klavyn">GitHub</a>
+        <a href="https://github.com/nickvigilante/klavyn/blob/main/SECURITY.md">Security</a>
+      </div>
+      <span class="foot-note">MIT / Apache-2.0 · klavyn.app</span>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      var btn = document.getElementById('copyBtn');
+      var cmd = "curl -fsSL https://klavyn.app/install.sh | sh";
+      btn && btn.addEventListener('click', function () {
+        navigator.clipboard && navigator.clipboard.writeText(cmd).then(function () {
+          btn.textContent = 'Copied'; btn.classList.add('done');
+          setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1600);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
