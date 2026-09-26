@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Learn chorded typing — klavyn</title>
+<meta name="description" content="What chorded typing is, how holding and rolling differ, and how to build the skill with klavyn." />
+<meta name="theme-color" content="#080b14" />
+    <meta property="og:url" content="https://klavyn.app/learn" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Learn chorded typing — klavyn" />
+    <meta property="og:description" content="What chorded typing is, how holding and rolling differ, and how to build the skill." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/apple-touch-icon.png" sizes="180x180" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta property="og:image" content="https://klavyn.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://klavyn.app/og.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/klavyn.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-in">
+      <a class="brand" href="/"><span class="k">k</span>la<span class="v">v</span>yn</a>
+      <nav class="links">
+        <a href="/docs">Docs</a>
+        <a href="/learn" class="active">Learn</a>
+        <a href="/download">Download</a>
+        <a class="gh" href="https://github.com/klavyn/klavyn">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero min">
+      <div class="glow"></div>
+      <div class="wrap hero-inner">
+        <p class="page-kicker">Learn</p>
+        <h1 class="page-title">Chorded typing, from scratch</h1>
+        <p class="sub">The whole idea in a few minutes — then the two techniques that make it work on a normal keyboard.</p>
+      </div>
+    </section>
+
+    <section class="demo">
+      <div class="wrap">
+        <div class="demo-card">
+          <p class="demo-label">the core idea</p>
+          <div class="keys">
+            <span class="key lit">k</span>
+            <span class="key lit">l</span>
+            <span class="key lit">o</span>
+            <span class="arrow">→</span>
+            <span class="out">look</span>
+          </div>
+          <p class="demo-sub">One press of a word's letters, one word out. That's the entire concept — the rest is technique and practice.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="prose wrap">
+      <h2 id="what"><a href="#what" class="hashtag">#</a> What is chorded typing?</h2>
+      <p>Normal typing is <strong>sequential</strong>: one key, one letter, in order. Chorded typing is <strong>simultaneous</strong>: you press a small set of keys as a group — a "chord," like on a piano — and get a whole word. Court stenographers hit ~300 words per minute this way. Dedicated hardware like the <a href="https://www.charachorder.com/">CharaChorder</a> is built for it.</p>
+      <p>klavyn brings the core skill to the keyboard you already have. You press the letters of a word — in <em>any</em> order — and it swaps what you typed for the word.</p>
+
+      <h2 id="unordered"><a href="#unordered" class="hashtag">#</a> Order doesn't matter</h2>
+      <p>A chord is an unordered <strong>set</strong> of letters. To type <code>look</code> you press <code>l</code>, <code>o</code>, <code>k</code> (the repeated <code>o</code> collapses) — and it doesn't matter whether your fingers land as <code>k-l-o</code>, <code>o-l-k</code>, or all at once. Less to memorize: you already know a word's letters.</p>
+      <blockquote>Because chords are sets, a few words collide — <code>{a,e,r}</code> could be <code>are</code>, <code>ear</code>, or <code>era</code>. klavyn keeps the most common word per set so every chord resolves to exactly one word.</blockquote>
+
+      <h2 id="hold-vs-roll"><a href="#hold-vs-roll" class="hashtag">#</a> Hold vs. roll</h2>
+      <p>There are two ways to enter a chord, and you'll mix both:</p>
+      <div class="grid two" style="margin:22px 0 8px">
+        <div class="card c-cyan">
+          <div class="ic">⬇</div>
+          <h3>Hold</h3>
+          <p>Press the letters together and release. Fast and natural for short, 2–4 letter chords your hand can span at once.</p>
+        </div>
+        <div class="card c-violet">
+          <div class="ic">〜</div>
+          <h3>Roll</h3>
+          <p>Press and release letters in a quick ripple, each within the roll-gap window. This is how long words work — you never hold more than a couple of keys at any instant.</p>
+        </div>
+      </div>
+      <p>The roll gap defaults to 200&nbsp;ms (tune it with <code>--roll-gap-ms</code>). As long as each new press starts before the keyboard "goes idle" for that long, klavyn treats the ripple as one chord.</p>
+
+      <h2 id="rollover"><a href="#rollover" class="hashtag">#</a> Why rolling matters: rollover</h2>
+      <p>Most non-gaming keyboards can only report a handful of simultaneous keys — commonly six. That ceiling is called <strong>key rollover</strong>. If chording meant <em>holding</em> every letter at once, a six-key ceiling would cap you at six-letter words.</p>
+      <p>Rolling sidesteps the ceiling entirely: at any single instant you're only holding one or two keys, so a seven-, eight-, nine-letter word is no problem. Measure your own ceiling with:</p>
+      <pre><code><span class="prompt">$ </span>klavyn detect-rollover</code></pre>
+      <p>It reports the most simultaneous keys your OS and keyboard actually deliver — the real number, end-to-end, not a spec sheet. Anything longer than that, you'll roll.</p>
+
+      <h2 id="practice"><a href="#practice" class="hashtag">#</a> Building the skill</h2>
+      <ol>
+        <li><strong>Start in <code>--dry-run</code>.</strong> Watch klavyn recognize chords without touching your text, so mistakes cost nothing.</li>
+        <li><strong>Pick ten common words.</strong> <code>the</code>, <code>and</code>, <code>you</code>, <code>that</code>, <code>have</code>… drill those chords until they're automatic before adding more.</li>
+        <li><strong>Hold the short ones, roll the long ones.</strong> Let your hands learn which words feel like a grab and which feel like a ripple.</li>
+        <li><strong>Tune the roll gap.</strong> Getting accidental corrections during fast normal typing? Lower <code>--roll-gap-ms</code>. Chords not registering? Raise it.</li>
+        <li><strong>Turn off dry-run</strong> once the muscle memory is there, and let klavyn do the corrections for real.</li>
+      </ol>
+      <p>If you later buy a CharaChorder, the skill transfers directly — same idea, dedicated hardware.</p>
+
+      <hr />
+      <p>Ready to install? <a href="/download">Download klavyn</a>. Want the flags and internals? <a href="/docs">Read the docs</a>.</p>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot-in">
+      <a class="brand" href="/" style="font-size:17px"><span class="k">k</span>la<span class="v">v</span>yn</a>
+      <div class="foot-links">
+        <a href="/docs">Docs</a>
+        <a href="/learn">Learn</a>
+        <a href="/download">Download</a>
+        <a href="https://github.com/klavyn/klavyn">GitHub</a>
+        <a href="https://github.com/klavyn/klavyn/blob/main/SECURITY.md">Security</a>
+      </div>
+      <span class="foot-note">MIT / Apache-2.0 · klavyn.app</span>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,4 +1,4 @@
-//! WASM bindings for typhony-core.
+//! WASM bindings for klavyn-core.
 //!
 //! The browser can't do global key capture the way the native CLI does —
 //! and shouldn't. Here the page's own textarea provides keydown/keyup
@@ -6,7 +6,7 @@
 //! this module which word the held letter-set resolves to. Same core
 //! dictionary as the native tool, no OS access.
 
-use typhony_core::dictionary::Dictionary;
+use klavyn_core::dictionary::Dictionary;
 use wasm_bindgen::prelude::*;
 
 /// The dictionaries are compiled into the WASM binary — a browser has no

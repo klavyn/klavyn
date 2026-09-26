@@ -424,6 +424,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "klavyn"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "enigo",
+ "klavyn-core",
+ "rdev",
+]
+
+[[package]]
+name = "klavyn-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "csv",
+ "tempfile",
+]
+
+[[package]]
+name = "klavyn-wasm"
+version = "0.1.0"
+dependencies = [
+ "klavyn-core",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -691,35 +720,6 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys",
-]
-
-[[package]]
-name = "typhony"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "enigo",
- "rdev",
- "typhony-core",
-]
-
-[[package]]
-name = "typhony-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "csv",
- "tempfile",
-]
-
-[[package]]
-name = "typhony-wasm"
-version = "0.1.0"
-dependencies = [
- "typhony-core",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]

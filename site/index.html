@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>klavyn — chorded typing for every language</title>
+<meta name="description" content="Press a word's letters at once, in any order, and klavyn types the whole word. A QWERTY chorded-typing trainer. Local, private, open source." />
+<meta property="og:title" content="klavyn" />
+<meta property="og:description" content="Chorded typing on a normal keyboard. Press a word's letters at once, get the word." />
+<meta property="og:type" content="website" />
+<meta name="theme-color" content="#080b14" />
+    <meta property="og:url" content="https://klavyn.app/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/apple-touch-icon.png" sizes="180x180" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta property="og:image" content="https://klavyn.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://klavyn.app/og.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/klavyn.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-in">
+      <a class="brand" href="/"><span class="k">k</span>la<span class="v">v</span>yn</a>
+      <nav class="links">
+        <a href="/docs">Docs</a>
+        <a href="/learn">Learn</a>
+        <a href="/download">Download</a>
+        <a class="gh" href="https://github.com/klavyn/klavyn">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="glow"></div>
+      <div class="wrap hero-inner">
+        <span class="eyebrow">Chorded typing · <b>no special hardware</b></span>
+        <h1 class="wm wm-big wm-anim" aria-label="klavyn"><span class="ltr key-ltr k" style="--d:.05s" aria-hidden="true">k</span><span class="ltr fill-ltr" style="--d:.66s" aria-hidden="true">l</span><span class="ltr fill-ltr" style="--d:.74s" aria-hidden="true">a</span><span class="ltr key-ltr v" style="--d:.18s" aria-hidden="true">v</span><span class="ltr fill-ltr" style="--d:.82s" aria-hidden="true">y</span><span class="ltr fill-ltr" style="--d:.90s" aria-hidden="true">n</span></h1>
+        <p class="tagline">Keyboard shortcuts, for <span class="grad-word">every</span> language.</p>
+        <p class="sub">Press a word's letters at once — in any order — and klavyn types the whole word. Chorded typing that works across scripts and layouts, on the keyboard you already have. The <a href="https://www.charachorder.com/">CharaChorder</a> idea, in software.</p>
+
+        <div class="cta">
+          <a class="btn btn-primary" href="/download">▸ Install klavyn</a>
+          <a class="btn btn-ghost" href="/docs">Read the docs</a>
+        </div>
+
+        <div class="install" id="install">
+          <div class="cmd">
+            <span class="code"><span class="prompt">$ </span>curl -fsSL <b>https://klavyn.app/install.sh</b> | sh</span>
+            <button class="copy" id="copyBtn" aria-label="Copy install command">Copy</button>
+          </div>
+          <p class="cmd-note">macOS &amp; Linux · or <code>cargo install --git https://github.com/klavyn/klavyn</code> · <a href="/download">other ways →</a></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="demo">
+      <div class="wrap">
+        <p class="demo-label" style="text-align:center;margin-bottom:22px">the same idea, in every language</p>
+        <div class="kdemo" id="kbd-demo"></div>
+        <p class="kdemo-note">Press a word's letters — held or rolled — and klavyn resolves the chord to the word. It generalizes past QWERTY: <b>AZERTY</b>, Korean <b>Dubeolsik</b>, Russian <b>ЙЦУКЕН</b>, Arabic, and more. <br />Illustrative — real per-language dictionaries ship with klavyn.</p>
+      </div>
+    </section>
+
+    <section class="features">
+      <div class="wrap">
+        <div class="grid">
+          <div class="card c-cyan">
+            <div class="ic">⇄</div>
+            <h3>Hold <em>or</em> roll</h3>
+            <p>Mash the letters at once, or roll through them one at a time within the roll-gap window. Long words work even on keyboards with a low simultaneous-key ceiling.</p>
+          </div>
+          <div class="card c-blue">
+            <div class="ic">文</div>
+            <h3>Every language</h3>
+            <p>Dictionaries ship for many languages, with a community-extensible abbreviation tier layered on top of the per-language defaults.</p>
+          </div>
+          <div class="card c-violet">
+            <div class="ic">◈</div>
+            <h3>Local &amp; private</h3>
+            <p>Everything runs on your machine. No network calls, no disk writes of what you type. It's open source — read <a href="https://github.com/klavyn/klavyn/blob/main/SECURITY.md">SECURITY.md</a> and verify.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot-in">
+      <a class="brand" href="/" style="font-size:17px"><span class="k">k</span>la<span class="v">v</span>yn</a>
+      <div class="foot-links">
+        <a href="/docs">Docs</a>
+        <a href="/learn">Learn</a>
+        <a href="/download">Download</a>
+        <a href="https://github.com/klavyn/klavyn">GitHub</a>
+        <a href="https://github.com/klavyn/klavyn/blob/main/SECURITY.md">Security</a>
+      </div>
+      <span class="foot-note">MIT / Apache-2.0 · klavyn.app</span>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      var btn = document.getElementById('copyBtn');
+      var cmd = "curl -fsSL https://klavyn.app/install.sh | sh";
+      btn && btn.addEventListener('click', function () {
+        navigator.clipboard && navigator.clipboard.writeText(cmd).then(function () {
+          btn.textContent = 'Copied'; btn.classList.add('done');
+          setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1600);
+        });
+      });
+    })();
+  </script>
+  <script src="/demo.js"></script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>klavyn docs</title>
+<meta name="description" content="How klavyn works, how to run it, and how to configure chords and dictionaries." />
+<meta name="theme-color" content="#080b14" />
+    <meta property="og:url" content="https://klavyn.app/docs" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="klavyn docs" />
+    <meta property="og:description" content="How klavyn works, how to run it, and how to configure chords and dictionaries." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/apple-touch-icon.png" sizes="180x180" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta property="og:image" content="https://klavyn.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://klavyn.app/og.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/klavyn.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-in">
+      <a class="brand" href="/"><span class="k">k</span>la<span class="v">v</span>yn</a>
+      <nav class="links">
+        <a href="/docs" class="active">Docs</a>
+        <a href="/learn">Learn</a>
+        <a href="/download">Download</a>
+        <a class="gh" href="https://github.com/klavyn/klavyn">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero min">
+      <div class="glow"></div>
+      <div class="wrap hero-inner">
+        <p class="page-kicker">Documentation</p>
+        <h1 class="page-title">Docs</h1>
+        <p class="sub">What klavyn does, how to run it, and how it recognizes a chord.</p>
+      </div>
+    </section>
+
+    <section class="prose wrap">
+      <p class="lead">klavyn is a QWERTY chorded-typing trainer. Press the letters of a word at once — in any order — and it replaces what you typed with the whole word. It approximates a <a href="https://www.charachorder.com/">CharaChorder</a> in software, on ordinary hardware.</p>
+
+      <h2 id="install"><a href="#install" class="hashtag">#</a> Install</h2>
+      <pre><code><span class="prompt">$ </span>curl -fsSL https://klavyn.app/install.sh | sh</code></pre>
+      <p>See <a href="/download">Download</a> for Cargo, building from source, and per-platform permission notes.</p>
+
+      <h2 id="run"><a href="#run" class="hashtag">#</a> Running klavyn</h2>
+      <pre><code><span class="prompt">$ </span>klavyn --quiet
+klavyn: loaded 4112 chords from "data/dictionary.en.csv"
+klavyn: listening globally (roll gap 200ms). Ctrl+C to quit.
+klavyn: chord "klo" -&gt; "look"</code></pre>
+      <p>Common flags:</p>
+      <table>
+        <thead><tr><th>Flag</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>--dry-run</code></td><td>Recognize and log chords without injecting corrections. Safe first run.</td></tr>
+          <tr><td><code>--roll-gap-ms &lt;n&gt;</code></td><td>Max idle gap between rolled keypresses (default 200). Lower = stricter.</td></tr>
+          <tr><td><code>--quiet</code></td><td>Only log matched chords, not every keystroke event.</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="how"><a href="#how" class="hashtag">#</a> How it recognizes a chord</h2>
+      <p>klavyn listens globally for key presses (via <code>rdev</code>) and matches a chord two ways:</p>
+      <ul>
+        <li><strong>Held together</strong> — press several letters at once, then release them.</li>
+        <li><strong>Arpeggiated / rolled</strong> — press and release letters one at a time (or a couple at once), as long as each new press starts within <code>--roll-gap-ms</code> of the keyboard last going idle.</li>
+      </ul>
+      <p>Once the chord's letters are known, klavyn looks them up in its dictionary and, on a match, backspaces what you literally typed and types the matched word instead (via <code>enigo</code>).</p>
+
+      <blockquote>Rolling is what makes long words work on ordinary keyboards. Your keyboard's simultaneous-key ceiling (often 6 on non-NKRO boards) only limits how many keys you can hold at one instant — rolling never asks for more than that.</blockquote>
+
+      <h2 id="rollover"><a href="#rollover" class="hashtag">#</a> Measuring your keyboard</h2>
+      <pre><code><span class="prompt">$ </span>klavyn detect-rollover</code></pre>
+      <p>Hold as many different letter keys as you can for a few seconds; klavyn reports the maximum it actually saw end-to-end. Purely informational — it tells you which words you'll want to roll rather than hold. See <a href="/learn#rollover">Learn → rollover</a> for what the number means.</p>
+
+      <h2 id="collisions"><a href="#collisions" class="hashtag">#</a> Letter-set collisions</h2>
+      <p>Because a chord is an unordered <em>set</em> of letters, some words share one — <code>{a,e,r}</code> is <code>are</code>, <code>ear</code>, and <code>era</code>. Each per-language dictionary resolves every collision by keeping only the highest-frequency word for that letter set, so a chord is always unambiguous.</p>
+
+      <h2 id="v1"><a href="#v1" class="hashtag">#</a> A known v1 limitation</h2>
+      <p>klavyn lets your OS type the individual letters normally, then corrects them after the fact (backspace + retype), the same way autocorrect works. Genuinely fast sequential typing that lands within the roll-gap window can occasionally get "corrected" into a chord you didn't intend — that's the <code>--roll-gap-ms</code> knob to tune. True keystroke suppression is a possible v2.</p>
+
+      <h2 id="config"><a href="#config" class="hashtag">#</a> Configuration (in progress)</h2>
+      <p>Dictionaries ship as per-language CSVs, with a community-extensible abbreviation tier layered on top. A TOML config format (<code>.klavyn.toml</code> project-local, with an optional global <code>~/.config/klavyn/config.toml</code>) is on the roadmap. Follow <a href="https://github.com/klavyn/klavyn/blob/main/docs/roadmap.md">docs/roadmap.md</a> for status.</p>
+
+      <hr />
+      <p>Questions, bugs, or dictionary contributions → <a href="https://github.com/klavyn/klavyn/issues">GitHub issues</a>. Security posture → <a href="https://github.com/klavyn/klavyn/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot-in">
+      <a class="brand" href="/" style="font-size:17px"><span class="k">k</span>la<span class="v">v</span>yn</a>
+      <div class="foot-links">
+        <a href="/docs">Docs</a>
+        <a href="/learn">Learn</a>
+        <a href="/download">Download</a>
+        <a href="https://github.com/klavyn/klavyn">GitHub</a>
+        <a href="https://github.com/klavyn/klavyn/blob/main/SECURITY.md">Security</a>
+      </div>
+      <span class="foot-note">MIT / Apache-2.0 · klavyn.app</span>
+    </div>
+  </footer>
+</body>
+</html>

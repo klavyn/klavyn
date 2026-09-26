@@ -11,12 +11,12 @@ use std::time::{Duration, Instant};
 use clap::{Args, Parser, Subcommand};
 use rdev::{Event, EventType, Key as RdevKey};
 
-use typhony_core::dictionary::Dictionary;
-use typhony_core::matcher::{self, ChordBuffer};
+use klavyn_core::dictionary::Dictionary;
+use klavyn_core::matcher::{self, ChordBuffer};
 use inject::Injector;
 
-/// typhony: a QWERTY chorded-typing trainer. Press a word's letters at once
-/// or roll through them one at a time (in any order) and typhony replaces
+/// klavyn: a QWERTY chorded-typing trainer. Press a word's letters at once
+/// or roll through them one at a time (in any order) and klavyn replaces
 /// them with the whole word — the same idea as CharaChorder, approximated
 /// on a normal keyboard.
 #[derive(Parser)]
@@ -35,7 +35,7 @@ enum Commands {
     Run(RunArgs),
     /// Hold down as many letter keys as you can for a few seconds, to see
     /// how many your keyboard/OS can actually report at once. Purely
-    /// informational — typhony's roll/arpeggiate matching works regardless
+    /// informational — klavyn's roll/arpeggiate matching works regardless
     /// of this ceiling, but it's useful for knowing which words you'll
     /// need to roll rather than hold.
     DetectRollover,
@@ -140,7 +140,7 @@ struct SegmentsArgs {
 
     /// Chord both words instead of typing them. Chord word 1 (press its
     /// keys together, release), immediately chord word 2, then Return — no
-    /// pause, no manual spaces (typhony emits those). Each word commits when
+    /// pause, no manual spaces (klavyn emits those). Each word commits when
     /// you release its keys, so fully release word 1 before pressing word 2
     /// or the two merge into one unresolvable burst. Ignored with --compare.
     #[arg(long)]
@@ -182,7 +182,7 @@ struct BenchmarkArgs {
     #[arg(long)]
     repeat_phrase: Option<String>,
 
-    /// Hard time limit in seconds for --repeat-phrase: typhony injects a
+    /// Hard time limit in seconds for --repeat-phrase: klavyn injects a
     /// synthetic Enter at this deadline, so you don't have to self-time
     /// and remember to stop. Ignored for plain --sentence mode.
     #[arg(long, default_value_t = 15)]
@@ -201,9 +201,9 @@ struct BenchmarkArgs {
     #[arg(long)]
     word: Option<String>,
 
-    /// Run typhony's chord engine in the background during the timed
+    /// Run klavyn's chord engine in the background during the timed
     /// attempt, so chording the sentence's words gets corrected live (same
-    /// as `typhony run`). Omit this to measure your normal, un-chorded
+    /// as `klavyn run`). Omit this to measure your normal, un-chorded
     /// typing as a baseline.
     #[arg(long)]
     chording: bool,
@@ -253,7 +253,7 @@ struct RunArgs {
 
     /// Don't print recognized chords (the resulting word, not your raw
     /// keystrokes) to the terminal. See SECURITY.md: this output is never
-    /// written to a file or sent anywhere by typhony itself, but if you
+    /// written to a file or sent anywhere by klavyn itself, but if you
     /// want zero terminal echo at all — e.g. on a shared or logged
     /// terminal session — this suppresses it.
     #[arg(long)]
@@ -281,22 +281,22 @@ fn run(args: RunArgs) -> anyhow::Result<()> {
         anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
     }
     eprintln!(
-        "typhony: loaded {} chords from {:?}",
+        "klavyn: loaded {} chords from {:?}",
         dict.len(),
         args.dictionary
     );
     if let Some(abbrev) = &args.abbrev {
         dict.merge_overlay(abbrev)?;
         eprintln!(
-            "typhony: merged abbreviations from {abbrev:?} (now {} chords)",
+            "klavyn: merged abbreviations from {abbrev:?} (now {} chords)",
             dict.len()
         );
     }
     if args.dry_run {
-        eprintln!("typhony: --dry-run, will only log detected chords");
+        eprintln!("klavyn: --dry-run, will only log detected chords");
     }
     eprintln!(
-        "typhony: listening globally (roll gap {}ms). Ctrl+C to quit.",
+        "klavyn: listening globally (roll gap {}ms). Ctrl+C to quit.",
         args.roll_gap_ms
     );
 
@@ -403,10 +403,10 @@ fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
             match Injector::new() {
                 Ok(mut injector) => {
                     if let Err(e) = injector.press_enter() {
-                        eprintln!("typhony: couldn't auto-submit: {e}");
+                        eprintln!("klavyn: couldn't auto-submit: {e}");
                     }
                 }
-                Err(e) => eprintln!("typhony: couldn't auto-submit: {e}"),
+                Err(e) => eprintln!("klavyn: couldn't auto-submit: {e}"),
             }
         });
     }
@@ -448,7 +448,7 @@ fn start_chord_engine_if_requested(args: &BenchmarkArgs) -> anyhow::Result<()> {
         // Always quiet: printing "chord X -> Y" mid-benchmark would
         // clutter the timed prompt and give away words as they land.
         if let Err(e) = chord_loop(dict, roll_gap_ms, Some(injector), true) {
-            eprintln!("typhony: chord engine stopped: {e}");
+            eprintln!("klavyn: chord engine stopped: {e}");
         }
     });
     println!("(chording ON)");
@@ -475,7 +475,7 @@ struct ChordSpan {
 ///   typed line. A private per-trial listener captures first-keystroke
 ///   timing and any backspaces.
 /// - Chorded: the typed line can't be used — your Enter both ends the
-///   trial and commits the chord, and typhony's correction lands *after*
+///   trial and commits the chord, and klavyn's correction lands *after*
 ///   the line is submitted, unreachable via stdin. So the chord engine
 ///   itself reports what it resolved and how long the burst took, over a
 ///   channel; stdin is read only to consume your Enter and advance.
@@ -576,7 +576,7 @@ fn run_chorded_trials(args: &BenchmarkArgs, word: &str, n: u32) -> anyhow::Resul
     let engine_reset = Arc::clone(&reset);
     std::thread::spawn(move || {
         if let Err(e) = benchmark_chord_loop(dict, roll_gap_ms, injector, span_tx, engine_reset) {
-            eprintln!("typhony: chord engine stopped: {e}");
+            eprintln!("klavyn: chord engine stopped: {e}");
         }
     });
     println!("(chording ON)");
@@ -608,7 +608,7 @@ fn run_chorded_trials(args: &BenchmarkArgs, word: &str, n: u32) -> anyhow::Resul
         trials.push(benchmark::Trial {
             elapsed,
             matched,
-            backspaces: 0, // in chorded mode typhony does the correcting, not the user
+            backspaces: 0, // in chorded mode klavyn does the correcting, not the user
         });
     }
     benchmark::TrialsReport {
@@ -694,7 +694,7 @@ fn cmd_segments(args: SegmentsArgs) -> anyhow::Result<()> {
     // it doesn't correct the screen.
     std::thread::spawn(move || {
         if let Err(e) = segments_event_loop(dict, roll_gap_ms, tx) {
-            eprintln!("typhony: chord engine stopped: {e}");
+            eprintln!("klavyn: chord engine stopped: {e}");
         }
     });
     warm_up_listener();
@@ -1682,20 +1682,20 @@ fn handle_burst(
     let word = dict.lookup(&burst.letters)?.to_string();
     if !quiet {
         eprintln!(
-            "typhony: chord {:?} -> \"{word}\"",
+            "klavyn: chord {:?} -> \"{word}\"",
             sorted_display(&burst.letters)
         );
     }
     if let Some(injector) = injector {
         if let Err(e) = injector.replace(burst.press_count, &word) {
-            eprintln!("typhony: injection failed: {e}");
+            eprintln!("klavyn: injection failed: {e}");
         }
     }
     Some(word)
 }
 
 fn detect_rollover() -> anyhow::Result<()> {
-    eprintln!("typhony: rollover self-test.");
+    eprintln!("klavyn: rollover self-test.");
     eprintln!("Hold down as many DIFFERENT letter keys as you comfortably can at once,");
     eprintln!("then release them. You have 6 seconds. Go:");
 
@@ -1727,12 +1727,12 @@ fn detect_rollover() -> anyhow::Result<()> {
     }
 
     eprintln!();
-    eprintln!("typhony: max simultaneous letter keys observed: {max_simultaneous}");
+    eprintln!("klavyn: max simultaneous letter keys observed: {max_simultaneous}");
     if max_simultaneous <= 6 {
         eprintln!(
             "This looks like a typical 6-key-rollover (or lower) keyboard. Words needing more \
              unique letters than that will need to be rolled (pressed one/two at a time, \
-             quickly) rather than held all at once — typhony's --roll-gap-ms handles this \
+             quickly) rather than held all at once — klavyn's --roll-gap-ms handles this \
              automatically, no configuration needed."
         );
     } else {
@@ -1743,7 +1743,7 @@ fn detect_rollover() -> anyhow::Result<()> {
     }
     eprintln!(
         "Note: this measures what your OS/keyboard combo actually delivers end-to-end, which \
-         is what matters for typhony — not a theoretical spec-sheet number."
+         is what matters for klavyn — not a theoretical spec-sheet number."
     );
     Ok(())
 }
@@ -1754,7 +1754,7 @@ fn spawn_listener() -> mpsc::Receiver<Event> {
         if let Err(e) = rdev::listen(move |event| {
             let _ = tx.send(event);
         }) {
-            eprintln!("typhony: listen error: {e:?}");
+            eprintln!("klavyn: listen error: {e:?}");
         }
     });
     rx

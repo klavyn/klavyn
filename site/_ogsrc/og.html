@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700&family=JetBrains+Mono:wght@500;800&display=swap" rel="stylesheet" />
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    position: relative;
+    background:
+      radial-gradient(900px 520px at 50% -8%, rgba(76,125,247,.30), transparent 60%),
+      radial-gradient(760px 440px at 88% 8%, rgba(199,125,255,.20), transparent 55%),
+      radial-gradient(620px 460px at 8% 18%, rgba(52,224,230,.16), transparent 55%),
+      #080b14;
+    color: #e7eef9;
+    font-family: "Inter", system-ui, sans-serif;
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 0 88px;
+  }
+  .eyebrow {
+    font-family: "JetBrains Mono", monospace; font-size: 22px; font-weight: 500;
+    letter-spacing: .14em; text-transform: uppercase; color: #93a2be; margin-bottom: 30px;
+  }
+  .eyebrow b { color: #2cd4c0; font-weight: 700; }
+  .wm {
+    font-family: "JetBrains Mono", monospace; font-weight: 800; font-size: 210px;
+    line-height: .86; letter-spacing: -.03em; color: #e7eef9;
+    text-shadow: 0 0 80px rgba(76,125,247,.30);
+  }
+  .wm .k { color: #34e0e6; text-shadow: 0 0 60px rgba(52,224,230,.55); }
+  .wm .v { color: #a98bfb; text-shadow: 0 0 60px rgba(169,139,251,.55); }
+  .tag { font-size: 34px; font-weight: 700; margin-top: 34px; color: #e7eef9; }
+  .foot {
+    position: absolute; left: 88px; bottom: 54px;
+    font-family: "JetBrains Mono", monospace; font-size: 24px; color: #8090ab;
+  }
+  .foot b { color: #e7eef9; }
+  .bar { position: absolute; left: 0; top: 0; width: 100%; height: 8px;
+    background: linear-gradient(120deg, #34e0e6, #4c7df7 42%, #a98bfb 78%, #c77dff); }
+</style>
+</head>
+<body>
+  <div class="bar"></div>
+  <div class="eyebrow">Chorded typing · <b>no special hardware</b></div>
+  <div class="wm"><span class="k">k</span>la<span class="v">v</span>yn</div>
+  <div class="tag">Press a word's letters at once — get the whole word.</div>
+  <div class="foot"><b>klavyn.app</b> &nbsp;·&nbsp; open source · macOS &amp; Linux</div>
+</body>
+</html>
