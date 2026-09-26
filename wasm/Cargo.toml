@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "WASM bindings for klavyn-core: in-browser chord lookup for the demo site."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/nickvigilante/klavyn"
+repository = "https://github.com/klavyn/klavyn"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

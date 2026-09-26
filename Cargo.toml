@@ -10,7 +10,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A QWERTY chorded-typing trainer: press a word's letters at once, get the word."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/nickvigilante/klavyn"
+repository = "https://github.com/klavyn/klavyn"
 
 [dependencies]
 klavyn-core = { path = "core" }

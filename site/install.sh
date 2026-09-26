@@ -8,11 +8,11 @@
 #
 # Env overrides:
 #   KLAVYN_BIN_DIR   install destination (default: ~/.local/bin)
-#   KLAVYN_REPO      source repo        (default: nickvigilante/klavyn)
+#   KLAVYN_REPO      source repo        (default: klavyn/klavyn)
 
 set -eu
 
-REPO="${KLAVYN_REPO:-nickvigilante/klavyn}"
+REPO="${KLAVYN_REPO:-klavyn/klavyn}"
 BIN_DIR="${KLAVYN_BIN_DIR:-$HOME/.local/bin}"
 BIN_NAME="klavyn"
 
