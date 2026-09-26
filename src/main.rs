@@ -64,11 +64,17 @@ enum Commands {
 
 #[derive(Args, Clone)]
 struct CascadeArgs {
-    /// The phrase to produce. Chord mode presses one key per distinct
-    /// letter of each word, so words with distinct letters compare most
-    /// cleanly.
+    /// The phrase to produce.
     #[arg(long, default_value = "the quick brown fox")]
     phrase: String,
+
+    /// The chord keys for each word, one spec per phrase word, e.g.
+    /// "e+t;q+k;b+n;f+o+x" (also accepts space-separated "et qk bn fox").
+    /// A word's chord need not be its full spelling — an abbreviation like
+    /// e+t for "the" is the point. Defaults to each word's distinct
+    /// letters.
+    #[arg(long)]
+    chords: Option<String>,
 
     /// Valid full-phrase attempts to average per mode.
     #[arg(long, default_value_t = 5)]
@@ -726,17 +732,24 @@ fn cmd_crossover(args: CrossoverArgs) -> anyhow::Result<()> {
 
     println!("\n=== crossover (N={n}, first key -> Return, avg seconds) ===");
     println!(
-        "{:<10} {:>3} {:>7} {:>7} {:>7} {:>8}",
-        "word", "len", "type", "chord", "faster", "delta"
+        "{:<10} {:>3} {:>9} {:>7} {:>7} {:>7} {:>8}",
+        "word", "len", "chord", "type", "chord_t", "faster", "delta"
     );
     for (word, len, type_avg, chord_avg) in &rows {
+        // The crossover chord is the word's distinct letters, sorted.
+        let keys: std::collections::BTreeSet<char> = word.chars().collect();
+        let keys = keys
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join("+");
         let (faster, delta) = if chord_avg < type_avg {
             ("chord", type_avg.saturating_sub(*chord_avg))
         } else {
             ("type", chord_avg.saturating_sub(*type_avg))
         };
         println!(
-            "{word:<10} {len:>3} {:>7.3} {:>7.3} {faster:>7} {:>8.3}",
+            "{word:<10} {len:>3} {keys:>9} {:>7.3} {:>7.3} {faster:>7} {:>8.3}",
             type_avg.as_secs_f64(),
             chord_avg.as_secs_f64(),
             delta.as_secs_f64(),
@@ -821,6 +834,37 @@ fn cmd_cascade(args: CascadeArgs) -> anyhow::Result<()> {
     }
     let n = args.trials.max(1);
 
+    // One chord spec per word: the distinct keys to press for that word.
+    // Defaults to the word's own distinct letters; --chords overrides with
+    // custom abbreviations (e+t for "the", etc.).
+    let specs: Vec<std::collections::BTreeSet<char>> = match &args.chords {
+        Some(s) => {
+            let parsed = parse_chord_specs(s);
+            if parsed.len() != words.len() {
+                anyhow::bail!(
+                    "--chords has {} specs but the phrase has {} words",
+                    parsed.len(),
+                    words.len()
+                );
+            }
+            parsed
+        }
+        None => words.iter().map(|w| w.chars().collect()).collect(),
+    };
+    let keys_of = |set: &std::collections::BTreeSet<char>| {
+        set.iter()
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join("+")
+    };
+
+    println!("\nchords:");
+    for (word, spec) in words.iter().zip(&specs) {
+        println!("  {word:<10} {}", keys_of(spec));
+    }
+
     let (tx, rx) = mpsc::channel::<(Instant, EventType)>();
     std::thread::spawn(move || {
         let listener = spawn_listener();
@@ -834,17 +878,17 @@ fn cmd_cascade(args: CascadeArgs) -> anyhow::Result<()> {
     warm_up_listener();
 
     println!("\n--- type the phrase (x{n}) ---");
-    let type_costs = cascade_mode(&rx, &words, false, n)?;
+    let type_costs = cascade_mode(&rx, &words, &specs, false, n)?;
     println!("\n--- chord the phrase (x{n}) ---");
-    let chord_costs = cascade_mode(&rx, &words, true, n)?;
+    let chord_costs = cascade_mode(&rx, &words, &specs, true, n)?;
 
     println!(
         "\n=== cascade \"{}\" (N={n}, per-word cost incl. transition in, avg seconds) ===",
         args.phrase
     );
     println!(
-        "{:<10} {:>3} {:>7} {:>7} {:>7} {:>8}",
-        "word", "len", "type", "chord", "faster", "delta"
+        "{:<10} {:>7} {:>7} {:>7} {:>7} {:>8}",
+        "word", "chord", "type", "chord_t", "faster", "delta"
     );
     let mut type_total = Duration::ZERO;
     let mut chord_total = Duration::ZERO;
@@ -859,8 +903,8 @@ fn cmd_cascade(args: CascadeArgs) -> anyhow::Result<()> {
             ("type", c.saturating_sub(t))
         };
         println!(
-            "{word:<10} {:>3} {:>7.3} {:>7.3} {faster:>7} {:>8.3}",
-            word.chars().count(),
+            "{word:<10} {:>7} {:>7.3} {:>7.3} {faster:>7} {:>8.3}",
+            keys_of(&specs[i]),
             t.as_secs_f64(),
             c.as_secs_f64(),
             delta.as_secs_f64(),
@@ -872,7 +916,7 @@ fn cmd_cascade(args: CascadeArgs) -> anyhow::Result<()> {
         ("type", chord_total.saturating_sub(type_total))
     };
     println!(
-        "{:<10} {:>3} {:>7.3} {:>7.3} {tf:>7} {:>8.3}",
+        "{:<10} {:>7} {:>7.3} {:>7.3} {tf:>7} {:>8.3}",
         "TOTAL",
         "",
         type_total.as_secs_f64(),
@@ -882,11 +926,28 @@ fn cmd_cascade(args: CascadeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Parses "e+t;q+k;b+n;f+o+x" (or space-separated "et qk bn fox") into one
+/// key-set per word. Any non-letter (+, ;, spaces) is a separator or
+/// ignored.
+fn parse_chord_specs(s: &str) -> Vec<std::collections::BTreeSet<char>> {
+    s.split(|ch: char| ch == ';' || ch.is_whitespace())
+        .filter(|t| !t.is_empty())
+        .map(|t| {
+            t.chars()
+                .filter(|c| c.is_ascii_alphabetic())
+                .map(|c| c.to_ascii_lowercase())
+                .collect()
+        })
+        .filter(|set: &std::collections::BTreeSet<char>| !set.is_empty())
+        .collect()
+}
+
 /// Averages `n` valid full-phrase attempts, returning the mean per-word
 /// cost vector (one entry per word).
 fn cascade_mode(
     rx: &mpsc::Receiver<(Instant, EventType)>,
     words: &[String],
+    specs: &[std::collections::BTreeSet<char>],
     chord: bool,
     n: u32,
 ) -> anyhow::Result<Vec<Duration>> {
@@ -908,7 +969,7 @@ fn cascade_mode(
         }
 
         let result = if chord {
-            cascade_chord_costs(&events, words)
+            cascade_chord_costs(&events, specs)
         } else {
             cascade_type_costs(&events, words)
         };
@@ -988,13 +1049,14 @@ fn cascade_type_costs(
 }
 
 /// Per-word costs for a chorded phrase. Each word is one press-release
-/// group (all its distinct-letter keys down, then released). Word 0's cost
-/// is its first press to its last release; word i's cost is word i-1's
-/// last release to word i's last release (so forming word i's chord after
-/// releasing word i-1 counts as word i's).
+/// group (the word's chord keys down, then released). Word 0's cost is its
+/// first press to its last release; word i's cost is word i-1's last
+/// release to word i's last release (so forming word i's chord after
+/// releasing word i-1 counts as word i's). Each group's keys are checked
+/// against the corresponding chord spec.
 fn cascade_chord_costs(
     events: &[(Instant, EventType)],
-    words: &[String],
+    specs: &[std::collections::BTreeSet<char>],
 ) -> Result<Vec<Duration>, String> {
     let mut groups: Vec<(std::collections::BTreeSet<char>, Instant, Instant)> = Vec::new();
     let mut held: HashSet<char> = HashSet::new();
@@ -1028,24 +1090,24 @@ fn cascade_chord_costs(
         }
     }
 
-    if groups.len() != words.len() {
+    if groups.len() != specs.len() {
         return Err(format!(
             "got {} chords, expected {} — press each word's keys together and fully release before the next.",
             groups.len(),
-            words.len()
+            specs.len()
         ));
     }
-    for (group, word) in groups.iter().zip(words) {
-        let want: std::collections::BTreeSet<char> = word.chars().collect();
-        if group.0 != want {
+    for (group, want) in groups.iter().zip(specs) {
+        if &group.0 != want {
             return Err(format!(
-                "a chord's keys didn't match a phrase word (got {:?}).",
-                group.0.iter().collect::<String>()
+                "a chord's keys ({}) didn't match its spec ({}).",
+                group.0.iter().collect::<String>(),
+                want.iter().collect::<String>()
             ));
         }
     }
 
-    let mut costs = Vec::with_capacity(words.len());
+    let mut costs = Vec::with_capacity(specs.len());
     for (i, group) in groups.iter().enumerate() {
         let start = if i == 0 { group.1 } else { groups[i - 1].2 };
         costs.push(group.2.saturating_duration_since(start));
@@ -1481,8 +1543,11 @@ mod cascade_tests {
             (at(250), release(RdevKey::KeyK)),
             (at(300), press(RdevKey::Return)),
         ];
-        let words = vec!["hi".to_string(), "ok".to_string()];
-        let costs = cascade_chord_costs(&events, &words).unwrap();
+        let specs = vec![
+            "hi".chars().collect::<std::collections::BTreeSet<char>>(),
+            "ok".chars().collect(),
+        ];
+        let costs = cascade_chord_costs(&events, &specs).unwrap();
         assert_eq!(costs[0], Duration::from_millis(50)); // first press -> its release
         assert_eq!(costs[1], Duration::from_millis(200)); // prev release -> this release (forming ok counts here)
     }
@@ -1499,7 +1564,18 @@ mod cascade_tests {
             (at(50), release(RdevKey::KeyI)),
             (at(300), press(RdevKey::Return)),
         ];
-        let words = vec!["hi".to_string(), "ok".to_string()];
-        assert!(cascade_chord_costs(&events, &words).is_err());
+        let specs = vec![
+            "hi".chars().collect::<std::collections::BTreeSet<char>>(),
+            "ok".chars().collect(),
+        ];
+        assert!(cascade_chord_costs(&events, &specs).is_err());
+    }
+
+    #[test]
+    fn parses_the_plus_semicolon_chord_spec() {
+        let specs = parse_chord_specs("e+t;q+k;b+n;f+o+x");
+        assert_eq!(specs.len(), 4);
+        assert_eq!(specs[0], "et".chars().collect());
+        assert_eq!(specs[3], "fox".chars().collect());
     }
 }
