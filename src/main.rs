@@ -17,8 +17,8 @@ use dictionary::Dictionary;
 use inject::Injector;
 use matcher::ChordBuffer;
 
-/// korder: a QWERTY chorded-typing trainer. Press a word's letters at once
-/// or roll through them one at a time (in any order) and korder replaces
+/// acchordion: a QWERTY chorded-typing trainer. Press a word's letters at once
+/// or roll through them one at a time (in any order) and acchordion replaces
 /// them with the whole word — the same idea as CharaChorder, approximated
 /// on a normal keyboard.
 #[derive(Parser)]
@@ -37,7 +37,7 @@ enum Commands {
     Run(RunArgs),
     /// Hold down as many letter keys as you can for a few seconds, to see
     /// how many your keyboard/OS can actually report at once. Purely
-    /// informational — korder's roll/arpeggiate matching works regardless
+    /// informational — acchordion's roll/arpeggiate matching works regardless
     /// of this ceiling, but it's useful for knowing which words you'll
     /// need to roll rather than hold.
     DetectRollover,
@@ -76,7 +76,7 @@ struct SegmentsArgs {
 
     /// Chord both words instead of typing them. Chord word 1 (press its
     /// keys together, release), immediately chord word 2, then Return — no
-    /// pause, no manual spaces (korder emits those). Each word commits when
+    /// pause, no manual spaces (acchordion emits those). Each word commits when
     /// you release its keys, so fully release word 1 before pressing word 2
     /// or the two merge into one unresolvable burst. Ignored with --compare.
     #[arg(long)]
@@ -118,7 +118,7 @@ struct BenchmarkArgs {
     #[arg(long)]
     repeat_phrase: Option<String>,
 
-    /// Hard time limit in seconds for --repeat-phrase: korder injects a
+    /// Hard time limit in seconds for --repeat-phrase: acchordion injects a
     /// synthetic Enter at this deadline, so you don't have to self-time
     /// and remember to stop. Ignored for plain --sentence mode.
     #[arg(long, default_value_t = 15)]
@@ -137,9 +137,9 @@ struct BenchmarkArgs {
     #[arg(long)]
     word: Option<String>,
 
-    /// Run korder's chord engine in the background during the timed
+    /// Run acchordion's chord engine in the background during the timed
     /// attempt, so chording the sentence's words gets corrected live (same
-    /// as `korder run`). Omit this to measure your normal, un-chorded
+    /// as `acchordion run`). Omit this to measure your normal, un-chorded
     /// typing as a baseline.
     #[arg(long)]
     chording: bool,
@@ -189,7 +189,7 @@ struct RunArgs {
 
     /// Don't print recognized chords (the resulting word, not your raw
     /// keystrokes) to the terminal. See SECURITY.md: this output is never
-    /// written to a file or sent anywhere by korder itself, but if you
+    /// written to a file or sent anywhere by acchordion itself, but if you
     /// want zero terminal echo at all — e.g. on a shared or logged
     /// terminal session — this suppresses it.
     #[arg(long)]
@@ -214,22 +214,22 @@ fn run(args: RunArgs) -> anyhow::Result<()> {
         anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
     }
     eprintln!(
-        "korder: loaded {} chords from {:?}",
+        "acchordion: loaded {} chords from {:?}",
         dict.len(),
         args.dictionary
     );
     if let Some(abbrev) = &args.abbrev {
         dict.merge_overlay(abbrev)?;
         eprintln!(
-            "korder: merged abbreviations from {abbrev:?} (now {} chords)",
+            "acchordion: merged abbreviations from {abbrev:?} (now {} chords)",
             dict.len()
         );
     }
     if args.dry_run {
-        eprintln!("korder: --dry-run, will only log detected chords");
+        eprintln!("acchordion: --dry-run, will only log detected chords");
     }
     eprintln!(
-        "korder: listening globally (roll gap {}ms). Ctrl+C to quit.",
+        "acchordion: listening globally (roll gap {}ms). Ctrl+C to quit.",
         args.roll_gap_ms
     );
 
@@ -336,10 +336,10 @@ fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
             match Injector::new() {
                 Ok(mut injector) => {
                     if let Err(e) = injector.press_enter() {
-                        eprintln!("korder: couldn't auto-submit: {e}");
+                        eprintln!("acchordion: couldn't auto-submit: {e}");
                     }
                 }
-                Err(e) => eprintln!("korder: couldn't auto-submit: {e}"),
+                Err(e) => eprintln!("acchordion: couldn't auto-submit: {e}"),
             }
         });
     }
@@ -381,7 +381,7 @@ fn start_chord_engine_if_requested(args: &BenchmarkArgs) -> anyhow::Result<()> {
         // Always quiet: printing "chord X -> Y" mid-benchmark would
         // clutter the timed prompt and give away words as they land.
         if let Err(e) = chord_loop(dict, roll_gap_ms, Some(injector), true) {
-            eprintln!("korder: chord engine stopped: {e}");
+            eprintln!("acchordion: chord engine stopped: {e}");
         }
     });
     println!("(chording ON)");
@@ -408,7 +408,7 @@ struct ChordSpan {
 ///   typed line. A private per-trial listener captures first-keystroke
 ///   timing and any backspaces.
 /// - Chorded: the typed line can't be used — your Enter both ends the
-///   trial and commits the chord, and korder's correction lands *after*
+///   trial and commits the chord, and acchordion's correction lands *after*
 ///   the line is submitted, unreachable via stdin. So the chord engine
 ///   itself reports what it resolved and how long the burst took, over a
 ///   channel; stdin is read only to consume your Enter and advance.
@@ -509,7 +509,7 @@ fn run_chorded_trials(args: &BenchmarkArgs, word: &str, n: u32) -> anyhow::Resul
     let engine_reset = Arc::clone(&reset);
     std::thread::spawn(move || {
         if let Err(e) = benchmark_chord_loop(dict, roll_gap_ms, injector, span_tx, engine_reset) {
-            eprintln!("korder: chord engine stopped: {e}");
+            eprintln!("acchordion: chord engine stopped: {e}");
         }
     });
     println!("(chording ON)");
@@ -541,7 +541,7 @@ fn run_chorded_trials(args: &BenchmarkArgs, word: &str, n: u32) -> anyhow::Resul
         trials.push(benchmark::Trial {
             elapsed,
             matched,
-            backspaces: 0, // in chorded mode korder does the correcting, not the user
+            backspaces: 0, // in chorded mode acchordion does the correcting, not the user
         });
     }
     benchmark::TrialsReport {
@@ -627,7 +627,7 @@ fn cmd_segments(args: SegmentsArgs) -> anyhow::Result<()> {
     // it doesn't correct the screen.
     std::thread::spawn(move || {
         if let Err(e) = segments_event_loop(dict, roll_gap_ms, tx) {
-            eprintln!("korder: chord engine stopped: {e}");
+            eprintln!("acchordion: chord engine stopped: {e}");
         }
     });
     warm_up_listener();
@@ -1045,20 +1045,20 @@ fn handle_burst(
     let word = dict.lookup(&burst.letters)?.to_string();
     if !quiet {
         eprintln!(
-            "korder: chord {:?} -> \"{word}\"",
+            "acchordion: chord {:?} -> \"{word}\"",
             sorted_display(&burst.letters)
         );
     }
     if let Some(injector) = injector {
         if let Err(e) = injector.replace(burst.press_count, &word) {
-            eprintln!("korder: injection failed: {e}");
+            eprintln!("acchordion: injection failed: {e}");
         }
     }
     Some(word)
 }
 
 fn detect_rollover() -> anyhow::Result<()> {
-    eprintln!("korder: rollover self-test.");
+    eprintln!("acchordion: rollover self-test.");
     eprintln!("Hold down as many DIFFERENT letter keys as you comfortably can at once,");
     eprintln!("then release them. You have 6 seconds. Go:");
 
@@ -1090,12 +1090,12 @@ fn detect_rollover() -> anyhow::Result<()> {
     }
 
     eprintln!();
-    eprintln!("korder: max simultaneous letter keys observed: {max_simultaneous}");
+    eprintln!("acchordion: max simultaneous letter keys observed: {max_simultaneous}");
     if max_simultaneous <= 6 {
         eprintln!(
             "This looks like a typical 6-key-rollover (or lower) keyboard. Words needing more \
              unique letters than that will need to be rolled (pressed one/two at a time, \
-             quickly) rather than held all at once — korder's --roll-gap-ms handles this \
+             quickly) rather than held all at once — acchordion's --roll-gap-ms handles this \
              automatically, no configuration needed."
         );
     } else {
@@ -1106,7 +1106,7 @@ fn detect_rollover() -> anyhow::Result<()> {
     }
     eprintln!(
         "Note: this measures what your OS/keyboard combo actually delivers end-to-end, which \
-         is what matters for korder — not a theoretical spec-sheet number."
+         is what matters for acchordion — not a theoretical spec-sheet number."
     );
     Ok(())
 }
@@ -1117,7 +1117,7 @@ fn spawn_listener() -> mpsc::Receiver<Event> {
         if let Err(e) = rdev::listen(move |event| {
             let _ = tx.send(event);
         }) {
-            eprintln!("korder: listen error: {e:?}");
+            eprintln!("acchordion: listen error: {e:?}");
         }
     });
     rx

@@ -3,6 +3,19 @@
 version = 4
 
 [[package]]
+name = "acchordion"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "csv",
+ "enigo",
+ "rdev",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -381,19 +394,6 @@ name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
-
-[[package]]
-name = "korder"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "csv",
- "enigo",
- "rdev",
- "serde",
- "tempfile",
-]
 
 [[package]]
 name = "lazy_static"
