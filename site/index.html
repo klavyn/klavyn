@@ -41,9 +41,9 @@
       <div class="glow"></div>
       <div class="wrap hero-inner">
         <span class="eyebrow">Chorded typing · <b>no special hardware</b></span>
-        <h1 class="wm wm-big"><span class="k">k</span>la<span class="v">v</span>yn</h1>
-        <p class="tagline">Press a word's letters at once — get the whole word.</p>
-        <p class="sub">A QWERTY chorded-typing trainer. Hold or roll the letters in <em>any</em> order; klavyn recognizes the chord and types the word. The <a href="https://www.charachorder.com/">CharaChorder</a> idea, in software, on the keyboard you already have.</p>
+        <h1 class="wm wm-big wm-anim" aria-label="klavyn"><span class="ltr key-ltr k" style="--d:.05s" aria-hidden="true">k</span><span class="ltr fill-ltr" style="--d:.66s" aria-hidden="true">l</span><span class="ltr fill-ltr" style="--d:.74s" aria-hidden="true">a</span><span class="ltr key-ltr v" style="--d:.18s" aria-hidden="true">v</span><span class="ltr fill-ltr" style="--d:.82s" aria-hidden="true">y</span><span class="ltr fill-ltr" style="--d:.90s" aria-hidden="true">n</span></h1>
+        <p class="tagline">Keyboard shortcuts, for <span class="grad-word">every</span> language.</p>
+        <p class="sub">Press a word's letters at once — in any order — and klavyn types the whole word. Chorded typing that works across scripts and layouts, on the keyboard you already have. The <a href="https://www.charachorder.com/">CharaChorder</a> idea, in software.</p>
 
         <div class="cta">
           <a class="btn btn-primary" href="/download">▸ Install klavyn</a>
@@ -62,17 +62,9 @@
 
     <section class="demo">
       <div class="wrap">
-        <div class="demo-card">
-          <p class="demo-label">what a chord looks like</p>
-          <div class="keys">
-            <span class="key lit">k</span>
-            <span class="key lit">l</span>
-            <span class="key lit">o</span>
-            <span class="arrow">→</span>
-            <span class="out">look</span>
-          </div>
-          <p class="demo-sub">Three keys, pressed together or rolled fast — one word out. No seed letters, no separate theory to learn: just the word's own letters.</p>
-        </div>
+        <p class="demo-label" style="text-align:center;margin-bottom:22px">the same idea, in every language</p>
+        <div class="kdemo" id="kbd-demo"></div>
+        <p class="kdemo-note">Press a word's letters — held or rolled — and klavyn resolves the chord to the word. It generalizes past QWERTY: <b>AZERTY</b>, Korean <b>Dubeolsik</b>, Russian <b>ЙЦУКЕН</b>, Arabic, and more. <br />Illustrative — real per-language dictionaries ship with klavyn.</p>
       </div>
     </section>
 
@@ -125,5 +117,6 @@
       });
     })();
   </script>
+  <script src="/demo.js"></script>
 </body>
 </html>
