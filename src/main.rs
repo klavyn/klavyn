@@ -66,6 +66,19 @@ struct BenchmarkArgs {
     #[arg(long, default_value_t = 15)]
     duration_secs: u64,
 
+    /// Run this many isolated trials of a single word (use with --word)
+    /// instead of one sentence or a continuous repeat drill. Each trial:
+    /// type the word once, press Enter. Timed from your first keystroke
+    /// (not the "ready" prompt) to that Enter. Avoids --repeat-phrase's
+    /// failure mode of separate attempts bleeding into one unresolvable
+    /// burst when you switch words faster than the roll gap.
+    #[arg(long)]
+    trials: Option<u32>,
+
+    /// The word to use with --trials.
+    #[arg(long)]
+    word: Option<String>,
+
     /// Run korder's chord engine in the background during the timed
     /// attempt, so chording the sentence's words gets corrected live (same
     /// as `korder run`). Omit this to measure your normal, un-chorded
@@ -226,32 +239,16 @@ fn chord_loop(
 /// fired — is exactly what `chord_loop`'s injector would have sent to any
 /// other focused app, since a terminal is just another focused app to it.
 fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
+    if args.trials.is_some() {
+        return cmd_benchmark_trials(args);
+    }
+
     let sentence = args
         .sentence
         .clone()
         .unwrap_or_else(|| benchmark::DEFAULT_SENTENCE.to_string());
 
-    if args.chording {
-        let mut dict = Dictionary::load(&args.dictionary)?;
-        if let Some(abbrev) = &args.abbrev {
-            dict.merge_overlay(abbrev)?;
-        }
-        if dict.is_empty() {
-            anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
-        }
-        let injector = Injector::new()?;
-        let roll_gap_ms = args.roll_gap_ms;
-        std::thread::spawn(move || {
-            // Always quiet: printing "chord X -> Y" mid-benchmark would
-            // clutter the timed prompt and give away words as they land.
-            if let Err(e) = chord_loop(dict, roll_gap_ms, Some(injector), true) {
-                eprintln!("korder: chord engine stopped: {e}");
-            }
-        });
-        println!("(chording ON)");
-    } else {
-        println!("(chording OFF — baseline)");
-    }
+    start_chord_engine_if_requested(&args)?;
 
     if let Some(phrase) = &args.repeat_phrase {
         println!(
@@ -300,6 +297,94 @@ fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
     } else {
         benchmark::score(&sentence, typed, elapsed).print(label);
     }
+    Ok(())
+}
+
+/// Starts the chord engine in the background if `--chording` was passed,
+/// shared by both benchmark modes (one fixed sentence/repeat-phrase, and
+/// discrete trials).
+fn start_chord_engine_if_requested(args: &BenchmarkArgs) -> anyhow::Result<()> {
+    if !args.chording {
+        println!("(chording OFF — baseline)");
+        return Ok(());
+    }
+    let mut dict = Dictionary::load(&args.dictionary)?;
+    if let Some(abbrev) = &args.abbrev {
+        dict.merge_overlay(abbrev)?;
+    }
+    if dict.is_empty() {
+        anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
+    }
+    let injector = Injector::new()?;
+    let roll_gap_ms = args.roll_gap_ms;
+    std::thread::spawn(move || {
+        // Always quiet: printing "chord X -> Y" mid-benchmark would
+        // clutter the timed prompt and give away words as they land.
+        if let Err(e) = chord_loop(dict, roll_gap_ms, Some(injector), true) {
+            eprintln!("korder: chord engine stopped: {e}");
+        }
+    });
+    println!("(chording ON)");
+    Ok(())
+}
+
+/// Runs `args.trials` isolated reps of typing `args.word` once each,
+/// timed from the first real keystroke (not the "ready" prompt) to
+/// pressing Enter. See benchmark::Trial for why this exists instead of
+/// just running --repeat-phrase with duration_secs=0: rapid repeated
+/// chording bleeds separate attempts into one unresolvable burst if
+/// there's no real pause between them, and a discrete-trial loop
+/// naturally provides that pause (each rep waits for its own "ready?").
+fn cmd_benchmark_trials(args: BenchmarkArgs) -> anyhow::Result<()> {
+    let n = args.trials.unwrap();
+    let word = args
+        .word
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("--trials requires --word"))?;
+
+    start_chord_engine_if_requested(&args)?;
+
+    let mut trials = Vec::with_capacity(n as usize);
+    for i in 1..=n {
+        print!(
+            "\nTrial {i}/{n}: type \"{word}\" once, press Enter. Ready? Press Enter to begin... "
+        );
+        io::stdout().flush()?;
+        let mut throwaway = String::new();
+        io::stdin().read_line(&mut throwaway)?;
+
+        // Detect the first real keystroke on a side thread so the clock
+        // starts when typing actually begins, not at this "ready" prompt —
+        // the gap between them is human reaction time, which would
+        // otherwise swamp a single short word's measurement.
+        let (tx, first_key_rx) = mpsc::channel::<Instant>();
+        std::thread::spawn(move || {
+            let rx = spawn_listener();
+            for event in rx {
+                if matches!(event.event_type, EventType::KeyPress(_)) {
+                    let _ = tx.send(Instant::now());
+                    return;
+                }
+            }
+        });
+
+        let mut typed = String::new();
+        io::stdin().read_line(&mut typed)?;
+        let end = Instant::now();
+        let start = first_key_rx
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap_or(end);
+        let elapsed = end.saturating_duration_since(start);
+        let typed = typed.trim_end_matches(['\n', '\r']).trim();
+
+        trials.push(benchmark::Trial {
+            elapsed,
+            correct: typed == word,
+        });
+    }
+
+    let label = if args.chording { "chorded" } else { "raw" };
+    benchmark::TrialsReport { word, trials }.print(label);
     Ok(())
 }
 

@@ -6,6 +6,58 @@ use std::time::Duration;
 pub const DEFAULT_SENTENCE: &str =
     "the quick fox and the lazy dog went to find a different life together";
 
+/// One isolated trial: type a single word once, first keystroke to Enter,
+/// then the line is naturally "cleared" — the next trial starts from a
+/// fresh empty prompt. Exists because a continuous rapid-fire drill (see
+/// RepeatReport) has a failure mode: switching between short chords faster
+/// than the roll-gap merges separate attempts into one unresolvable burst.
+/// Discrete trials sidestep that by construction, and let each rep start
+/// from a real pause (e.g. hands back at home row) instead of momentum.
+pub struct Trial {
+    pub elapsed: Duration,
+    pub correct: bool,
+}
+
+pub struct TrialsReport {
+    pub word: String,
+    pub trials: Vec<Trial>,
+}
+
+impl TrialsReport {
+    pub fn print(&self, label: &str) {
+        let n = self.trials.len();
+        let correct = self.trials.iter().filter(|t| t.correct).count();
+        let correct_durations: Vec<Duration> = self
+            .trials
+            .iter()
+            .filter(|t| t.correct)
+            .map(|t| t.elapsed)
+            .collect();
+
+        println!();
+        println!("=== {label}: \"{}\", {n} trials ===", self.word);
+        for (i, t) in self.trials.iter().enumerate() {
+            let mark = if t.correct { "ok" } else { "MISS" };
+            println!("  {:>2}: {:>6.3}s  {mark}", i + 1, t.elapsed.as_secs_f64());
+        }
+        println!("correct:  {correct}/{n}");
+        if !correct_durations.is_empty() {
+            let total: Duration = correct_durations.iter().sum();
+            let avg = total / correct_durations.len() as u32;
+            let min = correct_durations.iter().min().unwrap();
+            let max = correct_durations.iter().max().unwrap();
+            println!("avg time (correct trials): {:.3}s", avg.as_secs_f64());
+            println!(
+                "min/max:                    {:.3}s / {:.3}s",
+                min.as_secs_f64(),
+                max.as_secs_f64()
+            );
+        } else {
+            println!("no correct trials to average");
+        }
+    }
+}
+
 /// A short phrase (one or more words) typed/chorded on repeat for a
 /// self-timed window (e.g. "type 'about me' over and over for ~15s"),
 /// rather than one fixed sentence. Useful for A/B-ing a specific chord's
