@@ -57,13 +57,24 @@ struct SegmentsArgs {
     #[arg(long, default_value = "about me")]
     phrase: String,
 
-    /// Chord the words instead of typing them. Chord word 1 (press its
+    /// Chord both words instead of typing them. Chord word 1 (press its
     /// keys together, release), immediately chord word 2, then Return — no
     /// pause, no manual spaces (korder emits those). Each word commits when
     /// you release its keys, so fully release word 1 before pressing word 2
-    /// or the two merge into one unresolvable burst.
+    /// or the two merge into one unresolvable burst. Ignored with --compare.
     #[arg(long)]
     chording: bool,
+
+    /// Run all three categories, --trials times each, and print a
+    /// comparison table: (1) chord+chord, (2) chord word 1 + type word 2,
+    /// (3) type+type. Directly shows whether chording a short second word
+    /// actually beats typing it.
+    #[arg(long)]
+    compare: bool,
+
+    /// Number of valid attempts to average each category over.
+    #[arg(long, default_value_t = 1)]
+    trials: u32,
 
     #[arg(long, default_value = "data/dictionary.en.csv")]
     dictionary: PathBuf,
@@ -580,94 +591,246 @@ fn cmd_segments(args: SegmentsArgs) -> anyhow::Result<()> {
     let words: Vec<String> = args.phrase.split_whitespace().map(str::to_string).collect();
     let [w1, w2] = <[String; 2]>::try_from(words)
         .map_err(|_| anyhow::anyhow!("--phrase must be exactly two words"))?;
+    let n = args.trials.max(1);
 
-    if args.chording {
-        segments_chording(&args, &w1, &w2)
-    } else {
-        segments_typing(&w1, &w2)
+    let mut dict = Dictionary::load(&args.dictionary)?;
+    if let Some(abbrev) = &args.abbrev {
+        dict.merge_overlay(abbrev)?;
     }
-}
-
-/// One typed attempt at "<w1> <w2>", segmented by the press instants of
-/// its individual keys. Validates the keystrokes matched the phrase
-/// exactly (any typo/backspace makes the segment boundaries meaningless),
-/// and asks for a retry otherwise.
-fn segments_typing(w1: &str, w2: &str) -> anyhow::Result<()> {
-    println!("(typing)");
-    let (tx, event_rx) = mpsc::channel::<(Instant, EventType)>();
+    if dict.is_empty() {
+        anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
+    }
+    let roll_gap_ms = args.roll_gap_ms;
+    let (tx, seg_rx) = mpsc::channel::<SegEvent>();
+    // One unified listener for the whole session. It forwards every letter
+    // and space press (for typed-word segmentation) and also emits a Chord
+    // event whenever a released key-group resolves to a word (for chorded
+    // segmentation). No injection — the benchmark only measures key timing,
+    // it doesn't correct the screen.
     std::thread::spawn(move || {
-        let rx = spawn_listener();
-        for event in rx {
-            let at = Instant::now();
-            if tx.send((at, event.event_type)).is_err() {
-                return;
-            }
+        if let Err(e) = segments_event_loop(dict, roll_gap_ms, tx) {
+            eprintln!("korder: chord engine stopped: {e}");
         }
     });
     warm_up_listener();
 
-    let expected: Vec<Option<char>> = w1
-        .chars()
-        .map(Some)
-        .chain(std::iter::once(None))
-        .chain(w2.chars().map(Some))
-        .collect();
-    let i_space = w1.chars().count();
+    let categories = if args.compare {
+        vec![
+            Category::ChordChord,
+            Category::ChordType,
+            Category::TypeType,
+        ]
+    } else if args.chording {
+        vec![Category::ChordChord]
+    } else {
+        vec![Category::TypeType]
+    };
 
-    loop {
-        while event_rx.try_recv().is_ok() {} // clear stale events before this attempt
+    let compare = categories.len() > 1;
+    let mut results: Vec<(Category, benchmark::AvgSegments)> = Vec::new();
+    for category in categories {
+        let reports = run_category(&seg_rx, category, &w1, &w2, n)?;
+        if let Some(avg) = benchmark::AvgSegments::of(&reports) {
+            results.push((category, avg));
+        }
+    }
 
-        println!("\nType \"{w1} {w2}\", then Enter:\n");
-        print!("> ");
-        io::stdout().flush()?;
-        let mut typed = String::new();
-        io::stdin().read_line(&mut typed)?;
-        std::thread::sleep(Duration::from_millis(30));
+    if compare {
+        println!("\n=== segments (phrase \"{w1} {w2}\", N={n}, avg seconds) ===");
+        println!(
+            "{:<16} {:>7} {:>9} {:>10} {:>8}",
+            "", "S1(w1)", "S4(tr)", "S5(w2+ret)", "total"
+        );
+        for (category, avg) in &results {
+            avg.print_row(category.label());
+        }
+    } else if let Some((category, avg)) = results.first() {
+        avg.print_block(category.label());
+    }
+    Ok(())
+}
 
-        // Ordered press instants, classified into letters / space / return.
-        let mut letters_and_space: Vec<(Instant, Option<char>)> = Vec::new(); // None = space
-        let mut ret: Option<Instant> = None;
-        while let Ok((at, event_type)) = event_rx.try_recv() {
-            if let EventType::KeyPress(key) = event_type {
-                if key == RdevKey::Return {
-                    ret.get_or_insert(at);
-                } else if key == RdevKey::Space {
-                    letters_and_space.push((at, None));
-                } else if let Some(c) = key_to_letter(key) {
-                    letters_and_space.push((at, Some(c)));
+#[derive(Copy, Clone)]
+enum Category {
+    /// Chord word 1, chord word 2, Return.
+    ChordChord,
+    /// Chord word 1, type word 2, Return.
+    ChordType,
+    /// Type word 1, space, type word 2, Return.
+    TypeType,
+}
+
+impl Category {
+    fn label(&self) -> &'static str {
+        match self {
+            Category::ChordChord => "1 chord+chord",
+            Category::ChordType => "2 chord+type",
+            Category::TypeType => "3 type+type",
+        }
+    }
+
+    fn prompt(&self, w1: &str, w2: &str) -> String {
+        match self {
+            Category::ChordChord => {
+                format!("chord \"{w1}\", then chord \"{w2}\" (no pause), Enter")
+            }
+            Category::ChordType => format!("chord \"{w1}\", then TYPE \"{w2}\", Enter"),
+            Category::TypeType => format!("type \"{w1} {w2}\", Enter"),
+        }
+    }
+
+    /// Turns one attempt's captured events into a SegmentReport, or an Err
+    /// message explaining why the attempt was invalid (for a retry).
+    fn extract(
+        &self,
+        events: &[SegEvent],
+        w1: &str,
+        w2: &str,
+    ) -> Result<benchmark::SegmentReport, String> {
+        let ret = events
+            .iter()
+            .find_map(|e| match e {
+                SegEvent::Return { at } => Some(*at),
+                _ => None,
+            })
+            .ok_or_else(|| "no Return seen — press Enter to finish.".to_string())?;
+        match self {
+            Category::ChordChord => {
+                let chords: Vec<&SegEvent> = events
+                    .iter()
+                    .filter(|e| matches!(e, SegEvent::Chord { .. }))
+                    .collect();
+                let got: Vec<&str> = chords.iter().map(|e| chord_parts(e).0).collect();
+                if got != [w1, w2] {
+                    return Err(format!(
+                        "got chords {got:?}, expected [{w1}, {w2}] — press each word's keys together as one chord (a rolled 2-key word splits into misses)."
+                    ));
                 }
+                let (_, f1, l1) = chord_parts(chords[0]);
+                let (_, f2, _) = chord_parts(chords[1]);
+                Ok(benchmark::SegmentReport::chording(f1, l1, f2, ret))
+            }
+            Category::ChordType => {
+                let first_chord = events.iter().find(|e| matches!(e, SegEvent::Chord { .. }));
+                let Some(chord) = first_chord else {
+                    return Err(format!(
+                        "no chord for \"{w1}\" — chord word 1 as one simultaneous press."
+                    ));
+                };
+                let (word, f1, l1) = chord_parts(chord);
+                if word != w1 {
+                    return Err(format!("first chord was \"{word}\", expected \"{w1}\"."));
+                }
+                // Word 2 is typed: its letters are the letter presses after
+                // word 1's chord released.
+                let typed_w2: Vec<(char, Instant)> = events
+                    .iter()
+                    .filter_map(|e| match e {
+                        SegEvent::Letter { c, at } if *at > l1 => Some((*c, *at)),
+                        _ => None,
+                    })
+                    .collect();
+                let spelled: String = typed_w2.iter().map(|(c, _)| c).collect();
+                if spelled != w2 {
+                    return Err(format!(
+                        "typed \"{spelled}\" after the chord, expected \"{w2}\" — type word 2 letter by letter."
+                    ));
+                }
+                let f2 = typed_w2[0].1;
+                Ok(benchmark::SegmentReport::chording(f1, l1, f2, ret))
+            }
+            Category::TypeType => {
+                // Letters and the single space, in press order.
+                let mut seq: Vec<(Instant, Option<char>)> = events
+                    .iter()
+                    .filter_map(|e| match e {
+                        SegEvent::Letter { c, at } => Some((*at, Some(*c))),
+                        SegEvent::Space { at } => Some((*at, None)),
+                        _ => None,
+                    })
+                    .collect();
+                seq.sort_by_key(|(at, _)| *at);
+                let expected: Vec<Option<char>> = w1
+                    .chars()
+                    .map(Some)
+                    .chain(std::iter::once(None))
+                    .chain(w2.chars().map(Some))
+                    .collect();
+                let observed: Vec<Option<char>> = seq.iter().map(|(_, c)| *c).collect();
+                if observed != expected {
+                    return Err(format!(
+                        "keystrokes didn't match \"{w1} {w2}\" exactly (a typo or backspace makes the boundaries meaningless)."
+                    ));
+                }
+                let i = w1.chars().count();
+                Ok(benchmark::SegmentReport::typing(
+                    seq[0].0,
+                    seq[i - 1].0,
+                    seq[i].0,
+                    seq[i + 1].0,
+                    ret,
+                ))
             }
         }
-
-        let observed: Vec<Option<char>> = letters_and_space.iter().map(|(_, c)| *c).collect();
-        if ret.is_none() {
-            println!("  no Return seen — press Enter to finish. Retrying.");
-            continue;
-        }
-        if observed != expected {
-            println!(
-                "  keystrokes didn't match \"{w1} {w2}\" exactly (a typo or backspace makes the boundaries meaningless). Retrying."
-            );
-            continue;
-        }
-
-        benchmark::SegmentReport::typing(
-            w1,
-            w2,
-            letters_and_space[0].0,           // w1 first letter
-            letters_and_space[i_space - 1].0, // w1 last letter
-            letters_and_space[i_space].0,     // space
-            letters_and_space[i_space + 1].0, // w2 first letter
-            ret.unwrap(),
-        )
-        .print("typing");
-        return Ok(());
     }
 }
 
-/// A chord commit (or the terminating Return) reported by the segments
-/// chord loop, with the instants the segment math needs.
+fn chord_parts(e: &SegEvent) -> (&str, Instant, Instant) {
+    match e {
+        SegEvent::Chord {
+            word,
+            first_press,
+            last_release,
+        } => (word.as_str(), *first_press, *last_release),
+        _ => unreachable!("chord_parts called on a non-Chord event"),
+    }
+}
+
+/// Prompts `n` valid attempts of one category, retrying (in place, with a
+/// reason) on any invalid attempt, and returns the per-attempt reports.
+fn run_category(
+    seg_rx: &mpsc::Receiver<SegEvent>,
+    category: Category,
+    w1: &str,
+    w2: &str,
+    n: u32,
+) -> anyhow::Result<Vec<benchmark::SegmentReport>> {
+    println!("\n--- {} (x{n}) ---", category.label());
+    let mut reports = Vec::with_capacity(n as usize);
+    while (reports.len() as u32) < n {
+        while seg_rx.try_recv().is_ok() {} // clear stale events before this attempt
+        print!(
+            "[{}/{n}] {}\n> ",
+            reports.len() + 1,
+            category.prompt(w1, w2)
+        );
+        io::stdout().flush()?;
+        let mut typed = String::new();
+        io::stdin().read_line(&mut typed)?;
+        std::thread::sleep(Duration::from_millis(80)); // let the Return-triggered commit report
+
+        let mut events = Vec::new();
+        while let Ok(ev) = seg_rx.try_recv() {
+            events.push(ev);
+        }
+        match category.extract(&events, w1, w2) {
+            Ok(report) => reports.push(report),
+            Err(reason) => println!("  {reason} Retrying."),
+        }
+    }
+    Ok(reports)
+}
+
+/// A raw key press (for typed-word segmentation), a resolved chord (for
+/// chorded segmentation), or the terminating Return, timestamped.
 enum SegEvent {
+    Letter {
+        c: char,
+        at: Instant,
+    },
+    Space {
+        at: Instant,
+    },
     Chord {
         word: String,
         first_press: Instant,
@@ -678,95 +841,12 @@ enum SegEvent {
     },
 }
 
-/// One chorded attempt at "<w1> <w2>": chord w1, pause (so it idle-commits
-/// before w2 starts), chord w2, Return. Segments from the two commits'
-/// press/release instants plus the Return.
-fn segments_chording(args: &SegmentsArgs, w1: &str, w2: &str) -> anyhow::Result<()> {
-    let mut dict = Dictionary::load(&args.dictionary)?;
-    if let Some(abbrev) = &args.abbrev {
-        dict.merge_overlay(abbrev)?;
-    }
-    if dict.is_empty() {
-        anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
-    }
-    let roll_gap_ms = args.roll_gap_ms;
-    let (tx, seg_rx) = mpsc::channel::<SegEvent>();
-    // No injector: the segments benchmark only needs to detect which word
-    // each chord resolves to and its key timing, not correct the screen.
-    // Skipping injection also removes a race where the synchronous
-    // backspace/retype blocked the loop thread mid-attempt and bunched the
-    // timestamps of the keys that queued behind it.
-    std::thread::spawn(move || {
-        if let Err(e) = segments_chord_loop(dict, roll_gap_ms, tx) {
-            eprintln!("korder: chord engine stopped: {e}");
-        }
-    });
-    println!("(chording)");
-    warm_up_listener();
-
-    loop {
-        while seg_rx.try_recv().is_ok() {} // clear stale events before this attempt
-
-        println!("\nChord \"{w1}\", then \"{w2}\" (no pause), then Enter:\n");
-        print!("> ");
-        io::stdout().flush()?;
-        let mut typed = String::new();
-        io::stdin().read_line(&mut typed)?;
-        std::thread::sleep(Duration::from_millis(80)); // let the Return-triggered commit report
-
-        let mut chords: Vec<(String, Instant, Instant)> = Vec::new();
-        let mut ret: Option<Instant> = None;
-        while let Ok(ev) = seg_rx.try_recv() {
-            match ev {
-                SegEvent::Chord {
-                    word,
-                    first_press,
-                    last_release,
-                } => chords.push((word, first_press, last_release)),
-                SegEvent::Return { at } => {
-                    ret.get_or_insert(at);
-                }
-            }
-        }
-
-        let got: Vec<&str> = chords.iter().map(|(w, ..)| w.as_str()).collect();
-        if ret.is_none() {
-            println!("  no Return seen — press Enter to finish the attempt. Retrying.");
-            continue;
-        }
-        if got != [w1, w2] {
-            println!(
-                "  got {got:?}, expected [{w1}, {w2}]. Press each word's keys together as one \
-                 chord (a rolled 2-key word like \"me\" splits into misses). Retrying."
-            );
-            continue;
-        }
-
-        benchmark::SegmentReport::chording(
-            w1,
-            w2,
-            chords[0].1,  // w1 first press
-            chords[0].2,  // w1 last release
-            chords[1].1,  // w2 first press
-            ret.unwrap(), // Return
-        )
-        .print("chording");
-        return Ok(());
-    }
-}
-
-/// Chord loop for the segments benchmark: reports each committed matched
-/// chord with its first-key-press and last-key-release instants, plus the
-/// terminating Return.
-///
-/// Commits a chord the instant all its keys are released (held goes
-/// empty), not on an idle timeout or a delimiter. That's the natural
-/// boundary for continuous simultaneous chording — release "about",
-/// immediately press "me", no pause anywhere except after Return. (It
-/// assumes each word is pressed as one simultaneous group, so `held`
-/// empties exactly once per word; it does not support rolled/arpeggiated
-/// entry, which the general `run` mode handles instead.)
-fn segments_chord_loop(
+/// Unified segments listener. Forwards every letter/space press and the
+/// Return, and — running the same release-to-commit chord detection as
+/// before — emits a Chord event whenever a released key-group resolves to
+/// a word. One loop serves all three categories; each reads the events it
+/// needs. See Category::extract.
+fn segments_event_loop(
     dict: Dictionary,
     roll_gap_ms: u64,
     tx: mpsc::Sender<SegEvent>,
@@ -781,8 +861,12 @@ fn segments_chord_loop(
             EventType::KeyPress(key) if key == RdevKey::Return => {
                 let _ = tx.send(SegEvent::Return { at: now });
             }
+            EventType::KeyPress(key) if key == RdevKey::Space => {
+                let _ = tx.send(SegEvent::Space { at: now });
+            }
             EventType::KeyPress(key) => {
                 if let Some(c) = key_to_letter(key) {
+                    let _ = tx.send(SegEvent::Letter { c, at: now });
                     burst_first.get_or_insert(now);
                     held.insert(c);
                     buffer.key_down(c, now);

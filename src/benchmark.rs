@@ -220,8 +220,6 @@ impl Report {
 /// full word-1-to-word-2 transition (= S2 + S3 when typing); S5 execute
 /// word 2 plus the terminating Return.
 pub struct SegmentReport {
-    pub word1: String,
-    pub word2: String,
     pub s1: Duration,
     pub s2: Option<Duration>,
     pub s3: Option<Duration>,
@@ -234,8 +232,6 @@ impl SegmentReport {
     /// last letter → space (S2); space → word 2's first letter (S3);
     /// their sum (S4); word 2's first letter → Return (S5).
     pub fn typing(
-        word1: &str,
-        word2: &str,
         w1_first: Instant,
         w1_last: Instant,
         space: Instant,
@@ -245,8 +241,6 @@ impl SegmentReport {
         let s2 = space.saturating_duration_since(w1_last);
         let s3 = w2_first.saturating_duration_since(space);
         Self {
-            word1: word1.to_string(),
-            word2: word2.to_string(),
             s1: w1_last.saturating_duration_since(w1_first),
             s2: Some(s2),
             s3: Some(s3),
@@ -259,16 +253,12 @@ impl SegmentReport {
     /// that release → word 2's first key-press (S4, the transition);
     /// word 2's first key-press → Return (S5). No space segments.
     pub fn chording(
-        word1: &str,
-        word2: &str,
         w1_first_press: Instant,
         w1_last_release: Instant,
         w2_first_press: Instant,
         ret: Instant,
     ) -> Self {
         Self {
-            word1: word1.to_string(),
-            word2: word2.to_string(),
             s1: w1_last_release.saturating_duration_since(w1_first_press),
             s2: None,
             s3: None,
@@ -276,34 +266,66 @@ impl SegmentReport {
             s5: ret.saturating_duration_since(w2_first_press),
         }
     }
+}
+
+/// Mean of each segment across several attempts of one category. S2/S3 are
+/// present only when every averaged attempt had them (typing).
+pub struct AvgSegments {
+    pub n: usize,
+    pub s1: Duration,
+    pub s2: Option<Duration>,
+    pub s3: Option<Duration>,
+    pub s4: Duration,
+    pub s5: Duration,
+}
+
+impl AvgSegments {
+    pub fn of(reports: &[SegmentReport]) -> Option<Self> {
+        let n = reports.len();
+        if n == 0 {
+            return None;
+        }
+        let mean = |sum: Duration| sum / n as u32;
+        let sum = |f: &dyn Fn(&SegmentReport) -> Duration| reports.iter().map(f).sum::<Duration>();
+        let all_have_space = reports.iter().all(|r| r.s2.is_some());
+        Some(Self {
+            n,
+            s1: mean(sum(&|r| r.s1)),
+            s2: all_have_space.then(|| mean(sum(&|r| r.s2.unwrap()))),
+            s3: all_have_space.then(|| mean(sum(&|r| r.s3.unwrap()))),
+            s4: mean(sum(&|r| r.s4)),
+            s5: mean(sum(&|r| r.s5)),
+        })
+    }
 
     pub fn total(&self) -> Duration {
         self.s1 + self.s4 + self.s5
     }
 
-    pub fn print(&self, label: &str) {
+    /// One aligned row for the comparison table (seconds, 3 decimals).
+    pub fn print_row(&self, label: &str) {
+        println!(
+            "{label:<16} {:>7.3} {:>9.3} {:>10.3} {:>8.3}",
+            self.s1.as_secs_f64(),
+            self.s4.as_secs_f64(),
+            self.s5.as_secs_f64(),
+            self.total().as_secs_f64(),
+        );
+    }
+
+    /// A labelled multi-line breakdown for a single category, including the
+    /// S2/S3 space split when present (typing).
+    pub fn print_block(&self, label: &str) {
         let opt = |d: Option<Duration>| match d {
             Some(d) => format!("{:.3}s", d.as_secs_f64()),
             None => "n/a".to_string(),
         };
-        println!();
-        println!(
-            "=== {label}: \"{}\" + \"{}\" segments ===",
-            self.word1, self.word2
-        );
-        println!(
-            "S1 execute \"{}\"        : {:.3}s",
-            self.word1,
-            self.s1.as_secs_f64()
-        );
+        println!("\n=== {label} (N={}, avg) ===", self.n);
+        println!("S1 execute word 1        : {:.3}s", self.s1.as_secs_f64());
         println!("S2 last letter -> space  : {}", opt(self.s2));
         println!("S3 space -> next word    : {}", opt(self.s3));
         println!("S4 transition            : {:.3}s", self.s4.as_secs_f64());
-        println!(
-            "S5 execute \"{}\" + Return : {:.3}s",
-            self.word2,
-            self.s5.as_secs_f64()
-        );
+        println!("S5 execute word 2 + ret  : {:.3}s", self.s5.as_secs_f64());
         println!(
             "total (S1+S4+S5)         : {:.3}s",
             self.total().as_secs_f64()
@@ -336,13 +358,26 @@ mod tests {
         let t0 = Instant::now();
         let at = |ms: u64| t0 + Duration::from_millis(ms);
         // a@0 ... t@400 (S1=400), space@500 (S2=100), m@640 (S3=140), Return@850 (S5=210)
-        let r = SegmentReport::typing("about", "me", at(0), at(400), at(500), at(640), at(850));
+        let r = SegmentReport::typing(at(0), at(400), at(500), at(640), at(850));
         assert_eq!(r.s1, Duration::from_millis(400));
         assert_eq!(r.s2, Some(Duration::from_millis(100)));
         assert_eq!(r.s3, Some(Duration::from_millis(140)));
         assert_eq!(r.s4, Duration::from_millis(240)); // S2 + S3
         assert_eq!(r.s5, Duration::from_millis(210));
-        assert_eq!(r.total(), Duration::from_millis(850)); // S1 + S4 + S5
+        assert_eq!(r.s1 + r.s4 + r.s5, Duration::from_millis(850)); // total
+    }
+
+    #[test]
+    fn average_segments_means_each_component() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let r1 = SegmentReport::chording(at(0), at(100), at(200), at(300));
+        let r2 = SegmentReport::chording(at(0), at(200), at(400), at(600));
+        let avg = AvgSegments::of(&[r1, r2]).unwrap();
+        assert_eq!(avg.n, 2);
+        assert_eq!(avg.s1, Duration::from_millis(150)); // (100 + 200) / 2
+        assert_eq!(avg.s2, None); // chording has no space segment
+        assert_eq!(avg.s4, Duration::from_millis(150)); // (100 + 200) / 2
     }
 
     #[test]
@@ -351,7 +386,7 @@ mod tests {
         let at = |ms: u64| t0 + Duration::from_millis(ms);
         // about: first press@0, last release@40 (S1=40); me first press@300
         // (S4=260); Return@360 (S5=60)
-        let r = SegmentReport::chording("about", "me", at(0), at(40), at(300), at(360));
+        let r = SegmentReport::chording(at(0), at(40), at(300), at(360));
         assert_eq!(r.s1, Duration::from_millis(40));
         assert_eq!(r.s2, None);
         assert_eq!(r.s3, None);
