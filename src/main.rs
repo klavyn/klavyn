@@ -346,24 +346,25 @@ fn cmd_benchmark_trials(args: BenchmarkArgs) -> anyhow::Result<()> {
 
     let mut trials = Vec::with_capacity(n as usize);
     for i in 1..=n {
-        print!(
-            "\nTrial {i}/{n}: type \"{word}\" once, press Enter. Ready? Press Enter to begin... "
-        );
+        // No "ready?" gate — straight to typing, so it's just
+        // type-word/Enter/type-word/Enter with no double confirmation.
+        print!("\nTrial {i}/{n}: type \"{word}\", then Enter... ");
         io::stdout().flush()?;
-        let mut throwaway = String::new();
-        io::stdin().read_line(&mut throwaway)?;
 
-        // Detect the first real keystroke on a side thread so the clock
-        // starts when typing actually begins, not at this "ready" prompt —
-        // the gap between them is human reaction time, which would
-        // otherwise swamp a single short word's measurement.
-        let (tx, first_key_rx) = mpsc::channel::<Instant>();
+        // Watch every keypress on a side thread (not just the first) so
+        // we can also count backspaces — a typo that gets self-corrected
+        // before Enter would otherwise submit a matching final string and
+        // look identical to a clean attempt, hiding a real error. Instant
+        // is captured on this thread as each event arrives (close to
+        // real-time), not later when main drains the channel, so the
+        // brief grace-period sleep below doesn't skew the timing.
+        let (tx, event_rx) = mpsc::channel::<(Instant, EventType)>();
         std::thread::spawn(move || {
             let rx = spawn_listener();
             for event in rx {
-                if matches!(event.event_type, EventType::KeyPress(_)) {
-                    let _ = tx.send(Instant::now());
-                    return;
+                let at = Instant::now();
+                if tx.send((at, event.event_type)).is_err() {
+                    return; // this trial is done; let the hook go idle
                 }
             }
         });
@@ -371,15 +372,27 @@ fn cmd_benchmark_trials(args: BenchmarkArgs) -> anyhow::Result<()> {
         let mut typed = String::new();
         io::stdin().read_line(&mut typed)?;
         let end = Instant::now();
-        let start = first_key_rx
-            .recv_timeout(Duration::from_millis(50))
-            .unwrap_or(end);
+        // Let any keystroke from just before Enter finish arriving.
+        std::thread::sleep(Duration::from_millis(30));
+
+        let mut first_key: Option<Instant> = None;
+        let mut backspaces = 0usize;
+        while let Ok((at, event_type)) = event_rx.try_recv() {
+            if let EventType::KeyPress(key) = event_type {
+                first_key.get_or_insert(at);
+                if key == RdevKey::Backspace {
+                    backspaces += 1;
+                }
+            }
+        }
+        let start = first_key.unwrap_or(end);
         let elapsed = end.saturating_duration_since(start);
         let typed = typed.trim_end_matches(['\n', '\r']).trim();
 
         trials.push(benchmark::Trial {
             elapsed,
-            correct: typed == word,
+            matched: typed == word,
+            backspaces,
         });
     }
 

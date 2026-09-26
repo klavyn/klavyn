@@ -15,7 +15,21 @@ pub const DEFAULT_SENTENCE: &str =
 /// from a real pause (e.g. hands back at home row) instead of momentum.
 pub struct Trial {
     pub elapsed: Duration,
-    pub correct: bool,
+    /// Final submitted text matched the target word exactly.
+    pub matched: bool,
+    /// Backspace presses observed during this trial. Matters even when
+    /// `matched` is true: typing "baout", backspacing, and fixing it to
+    /// "about" submits a correct final string but was still a real error
+    /// — treating it as identical to a clean attempt would hide that.
+    pub backspaces: usize,
+}
+
+impl Trial {
+    /// No mismatch and no self-correction — the only trials whose timing
+    /// is a meaningful "how fast is this chord/word" data point.
+    pub fn clean(&self) -> bool {
+        self.matched && self.backspaces == 0
+    }
 }
 
 pub struct TrialsReport {
@@ -26,34 +40,39 @@ pub struct TrialsReport {
 impl TrialsReport {
     pub fn print(&self, label: &str) {
         let n = self.trials.len();
-        let correct = self.trials.iter().filter(|t| t.correct).count();
-        let correct_durations: Vec<Duration> = self
+        let clean_count = self.trials.iter().filter(|t| t.clean()).count();
+        let clean_durations: Vec<Duration> = self
             .trials
             .iter()
-            .filter(|t| t.correct)
+            .filter(|t| t.clean())
             .map(|t| t.elapsed)
             .collect();
 
         println!();
         println!("=== {label}: \"{}\", {n} trials ===", self.word);
         for (i, t) in self.trials.iter().enumerate() {
-            let mark = if t.correct { "ok" } else { "MISS" };
+            let mark = match (t.matched, t.backspaces) {
+                (true, 0) => "ok".to_string(),
+                (true, n) => format!("ok (but {n} backspace{})", if n == 1 { "" } else { "s" }),
+                (false, 0) => "MISS".to_string(),
+                (false, n) => format!("MISS ({n} backspace{})", if n == 1 { "" } else { "s" }),
+            };
             println!("  {:>2}: {:>6.3}s  {mark}", i + 1, t.elapsed.as_secs_f64());
         }
-        println!("correct:  {correct}/{n}");
-        if !correct_durations.is_empty() {
-            let total: Duration = correct_durations.iter().sum();
-            let avg = total / correct_durations.len() as u32;
-            let min = correct_durations.iter().min().unwrap();
-            let max = correct_durations.iter().max().unwrap();
-            println!("avg time (correct trials): {:.3}s", avg.as_secs_f64());
+        println!("accuracy (clean, no typo or backspace): {clean_count}/{n}");
+        if !clean_durations.is_empty() {
+            let total: Duration = clean_durations.iter().sum();
+            let avg = total / clean_durations.len() as u32;
+            let min = clean_durations.iter().min().unwrap();
+            let max = clean_durations.iter().max().unwrap();
+            println!("avg time (clean trials): {:.3}s", avg.as_secs_f64());
             println!(
-                "min/max:                    {:.3}s / {:.3}s",
+                "min/max:                 {:.3}s / {:.3}s",
                 min.as_secs_f64(),
                 max.as_secs_f64()
             );
         } else {
-            println!("no correct trials to average");
+            println!("no clean trials to average");
         }
     }
 }
