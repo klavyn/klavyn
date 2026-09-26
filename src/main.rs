@@ -49,6 +49,23 @@ enum Commands {
     /// Return). Run with and without --chording to compare where the time
     /// actually goes.
     Segments(SegmentsArgs),
+    /// Sweep a length-graded set of words, timing each one typed vs chorded
+    /// (first key to Return), to find the crossover length where chording
+    /// starts to beat typing. Measures the raw keying gesture, so it needs
+    /// no dictionary match — any word works.
+    Crossover(CrossoverArgs),
+}
+
+#[derive(Args, Clone)]
+struct CrossoverArgs {
+    /// Space-separated words of increasing length to sweep. Distinct
+    /// letters recommended (a chord presses one key per distinct letter).
+    #[arg(long, default_value = "at cat chat chart charts")]
+    words: String,
+
+    /// Valid attempts to average per word per mode.
+    #[arg(long, default_value_t = 5)]
+    trials: u32,
 }
 
 #[derive(Args, Clone)]
@@ -186,6 +203,7 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::Run(args)) => run(args),
         Some(Commands::Benchmark(args)) => cmd_benchmark(args),
         Some(Commands::Segments(args)) => cmd_segments(args),
+        Some(Commands::Crossover(args)) => cmd_crossover(args),
         None => run(cli.run_args),
     }
 }
@@ -648,6 +666,125 @@ fn cmd_segments(args: SegmentsArgs) -> anyhow::Result<()> {
         avg.print_block(category.label());
     }
     Ok(())
+}
+
+/// Sweeps words of increasing length, timing each typed vs chorded (first
+/// key press to Return), to locate the crossover length where chording
+/// starts to win. Measures the raw keying gesture directly from key
+/// events, so it needs no dictionary match — the chord just has to hit the
+/// word's distinct-letter keys, resolving to whatever (or nothing).
+fn cmd_crossover(args: CrossoverArgs) -> anyhow::Result<()> {
+    let words: Vec<String> = args.words.split_whitespace().map(str::to_string).collect();
+    if words.is_empty() {
+        anyhow::bail!("--words was empty");
+    }
+    let n = args.trials.max(1);
+
+    let (tx, rx) = mpsc::channel::<(Instant, EventType)>();
+    std::thread::spawn(move || {
+        let listener = spawn_listener();
+        for event in listener {
+            let at = Instant::now();
+            if tx.send((at, event.event_type)).is_err() {
+                return;
+            }
+        }
+    });
+    warm_up_listener();
+
+    let mut rows: Vec<(String, usize, Duration, Duration)> = Vec::new();
+    for word in &words {
+        let unique = word.chars().collect::<HashSet<_>>().len();
+        println!(
+            "\n--- \"{word}\" (len {}, {unique} distinct) ---",
+            word.chars().count()
+        );
+        let type_avg = crossover_word(&rx, word, false, n)?;
+        let chord_avg = crossover_word(&rx, word, true, n)?;
+        rows.push((word.clone(), word.chars().count(), type_avg, chord_avg));
+    }
+
+    println!("\n=== crossover (N={n}, first key -> Return, avg seconds) ===");
+    println!(
+        "{:<10} {:>3} {:>7} {:>7} {:>7} {:>8}",
+        "word", "len", "type", "chord", "faster", "delta"
+    );
+    for (word, len, type_avg, chord_avg) in &rows {
+        let (faster, delta) = if chord_avg < type_avg {
+            ("chord", type_avg.saturating_sub(*chord_avg))
+        } else {
+            ("type", chord_avg.saturating_sub(*type_avg))
+        };
+        println!(
+            "{word:<10} {len:>3} {:>7.3} {:>7.3} {faster:>7} {:>8.3}",
+            type_avg.as_secs_f64(),
+            chord_avg.as_secs_f64(),
+            delta.as_secs_f64(),
+        );
+    }
+    Ok(())
+}
+
+/// Averages `n` valid single-word attempts. Times first letter press to
+/// Return. Typed attempts must produce the word's letters in order;
+/// chorded attempts must produce its distinct-letter set (any order), so a
+/// sequential roll doesn't masquerade as a chord.
+fn crossover_word(
+    rx: &mpsc::Receiver<(Instant, EventType)>,
+    word: &str,
+    chord: bool,
+    n: u32,
+) -> anyhow::Result<Duration> {
+    let mode = if chord { "chord" } else { "type" };
+    let expected_seq: Vec<char> = word.chars().collect();
+    let expected_set: HashSet<char> = word.chars().collect();
+
+    let mut total = Duration::ZERO;
+    let mut done = 0u32;
+    while done < n {
+        while rx.try_recv().is_ok() {} // clear stale events
+        print!("[{}/{n}] {mode} \"{word}\", Enter... ", done + 1);
+        io::stdout().flush()?;
+        let mut typed = String::new();
+        io::stdin().read_line(&mut typed)?;
+        std::thread::sleep(Duration::from_millis(30));
+
+        let mut presses: Vec<(Instant, char)> = Vec::new();
+        let mut ret: Option<Instant> = None;
+        while let Ok((at, event_type)) = rx.try_recv() {
+            if let EventType::KeyPress(key) = event_type {
+                if key == RdevKey::Return {
+                    ret.get_or_insert(at);
+                } else if let Some(c) = key_to_letter(key) {
+                    presses.push((at, c));
+                }
+            }
+        }
+
+        let Some(ret) = ret else {
+            println!("  no Return — press Enter to finish. Retrying.");
+            continue;
+        };
+        if presses.is_empty() {
+            println!("  no letters captured. Retrying.");
+            continue;
+        }
+        let seq: Vec<char> = presses.iter().map(|(_, c)| *c).collect();
+        let ok = if chord {
+            seq.iter().copied().collect::<HashSet<_>>() == expected_set
+                && seq.len() == expected_set.len()
+        } else {
+            seq == expected_seq
+        };
+        if !ok {
+            println!("  keys didn't match \"{word}\" ({mode}). Retrying.");
+            continue;
+        }
+
+        total += ret.saturating_duration_since(presses[0].0);
+        done += 1;
+    }
+    Ok(total / n)
 }
 
 #[derive(Copy, Clone)]
