@@ -1,5 +1,8 @@
 [workspace]
-members = ["core"]
+members = ["core", "wasm"]
+# wasm builds only via wasm-pack (wasm32 target); keep it out of the
+# default native build/test so `cargo build` / `cargo test` stay green.
+default-members = [".", "core"]
 
 [package]
 name = "acchordion"

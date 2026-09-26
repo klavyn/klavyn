@@ -22,6 +22,17 @@ impl Dictionary {
         Ok(dict)
     }
 
+    /// Builds a dictionary from CSV held in memory rather than on disk —
+    /// the constructor the WASM build uses, since a browser has no
+    /// filesystem to read a path from (the CSV is embedded via include_str!).
+    pub fn from_csv_str(csv: &str) -> anyhow::Result<Self> {
+        let mut dict = Self {
+            by_letterset: HashMap::new(),
+        };
+        dict.merge_overlay_str(csv)?;
+        Ok(dict)
+    }
+
     /// Loads a second CSV (same letterset,word,... format) on top of this
     /// one. Entries here win on a letterset collision — meant for a
     /// hand-curated abbreviation tier (e.g. "bc" -> "because") sitting on
@@ -29,7 +40,15 @@ impl Dictionary {
     /// code isn't derived from a word's letters the way the base
     /// dictionary's entries are, so it can't be generated the same way.
     pub fn merge_overlay(&mut self, path: &Path) -> anyhow::Result<()> {
-        let mut reader = csv::Reader::from_path(path)?;
+        self.merge_records(csv::Reader::from_path(path)?)
+    }
+
+    /// In-memory counterpart of `merge_overlay`, for the WASM build.
+    pub fn merge_overlay_str(&mut self, csv: &str) -> anyhow::Result<()> {
+        self.merge_records(csv::Reader::from_reader(csv.as_bytes()))
+    }
+
+    fn merge_records<R: std::io::Read>(&mut self, mut reader: csv::Reader<R>) -> anyhow::Result<()> {
         for record in reader.records() {
             let record = record?;
             let letterset = record.get(0).unwrap_or_default().to_string();
