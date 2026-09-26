@@ -6,6 +6,71 @@ use std::time::Duration;
 pub const DEFAULT_SENTENCE: &str =
     "the quick fox and the lazy dog went to find a different life together";
 
+/// A single word typed/chorded repeatedly for a self-timed window (e.g.
+/// "type 'about' over and over for ~15s"), rather than one fixed sentence.
+/// Useful for A/B-ing one specific chord's comfort in isolation — does it
+/// actually beat typing that word normally, repetition for repetition —
+/// rather than averaging across a whole sentence's mix of chords.
+pub struct RepeatReport {
+    pub word: String,
+    pub attempts: usize,
+    pub correct: usize,
+    pub elapsed: Duration,
+    pub gross_wpm: f64,
+    /// Correct repetitions per minute — a more direct "how many 'about's
+    /// did I actually land" number than the chars/5 WPM convention, which
+    /// blends in whatever extra characters a botched chord attempt typed.
+    pub repetitions_per_minute: f64,
+    pub accuracy: f64,
+}
+
+/// Scores a repeat-word drill: `typed` is whatever ended up submitted,
+/// split on whitespace and compared token-by-token against `word`. Works
+/// identically whether chording was on or off — a correctly-fired chord's
+/// injected replacement is indistinguishable from having typed the word
+/// normally, which is exactly the point.
+pub fn score_repeated(word: &str, typed: &str, elapsed: Duration) -> RepeatReport {
+    let tokens: Vec<&str> = typed.split_whitespace().collect();
+    let attempts = tokens.len();
+    let correct = tokens.iter().filter(|t| **t == word).count();
+
+    let minutes = (elapsed.as_secs_f64() / 60.0).max(1.0 / 3600.0);
+    let typed_chars = typed.chars().count();
+    let gross_wpm = (typed_chars as f64 / 5.0) / minutes;
+    let repetitions_per_minute = correct as f64 / minutes;
+    let accuracy = if attempts == 0 {
+        0.0
+    } else {
+        100.0 * correct as f64 / attempts as f64
+    };
+
+    RepeatReport {
+        word: word.to_string(),
+        attempts,
+        correct,
+        elapsed,
+        gross_wpm,
+        repetitions_per_minute,
+        accuracy,
+    }
+}
+
+impl RepeatReport {
+    pub fn print(&self, label: &str) {
+        println!();
+        println!("=== {label}: \"{}\" repeated ===", self.word);
+        println!("time:        {:.2}s", self.elapsed.as_secs_f64());
+        println!("attempts:    {}", self.attempts);
+        println!("correct:     {}", self.correct);
+        println!("accuracy:    {:.1}%", self.accuracy);
+        println!("reps/min:    {:.1}", self.repetitions_per_minute);
+        println!(
+            "WPM:         {:.1}  (gross, chars/5 convention)",
+            self.gross_wpm
+        );
+    }
+}
+
 pub struct Report {
     pub sentence: String,
     pub typed: String,
@@ -109,5 +174,21 @@ mod tests {
         let typed = "a".repeat(50);
         let r = score(&typed, &typed, Duration::from_secs(60));
         assert!((r.gross_wpm - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn repeat_drill_counts_only_exact_matches() {
+        let r = score_repeated("about", "about about abuot about", Duration::from_secs(30));
+        assert_eq!(r.attempts, 4);
+        assert_eq!(r.correct, 3);
+        assert!((r.accuracy - 75.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn repeat_drill_reps_per_minute() {
+        // 10 correct repetitions in 30 seconds -> 20 reps/min.
+        let typed = "about ".repeat(10);
+        let r = score_repeated("about", typed.trim(), Duration::from_secs(30));
+        assert!((r.repetitions_per_minute - 20.0).abs() < 0.01);
     }
 }

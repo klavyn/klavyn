@@ -47,9 +47,18 @@ enum Commands {
 
 #[derive(Args, Clone)]
 struct BenchmarkArgs {
-    /// Sentence to type. Defaults to a short built-in sample.
+    /// Sentence to type. Defaults to a short built-in sample. Ignored if
+    /// --repeat-word is set.
     #[arg(long)]
     sentence: Option<String>,
+
+    /// Instead of one fixed sentence, type this one word repeatedly
+    /// (separated by spaces) for a self-timed window — e.g. ~15 seconds —
+    /// then press Enter. Scores correct repetitions and reps/minute,
+    /// rather than matching against a fixed target. Useful for A/B-ing one
+    /// specific chord's comfort in isolation.
+    #[arg(long)]
+    repeat_word: Option<String>,
 
     /// Run korder's chord engine in the background during the timed
     /// attempt, so chording the sentence's words gets corrected live (same
@@ -213,6 +222,7 @@ fn chord_loop(
 fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
     let sentence = args
         .sentence
+        .clone()
         .unwrap_or_else(|| benchmark::DEFAULT_SENTENCE.to_string());
 
     if args.chording {
@@ -237,8 +247,14 @@ fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
         println!("(chording OFF — baseline)");
     }
 
-    println!("\nType this sentence exactly, then press Enter:\n");
-    println!("  {sentence}\n");
+    if let Some(word) = &args.repeat_word {
+        println!(
+            "\nType \"{word}\" repeatedly, separated by spaces, for ~15 seconds, then press Enter:\n"
+        );
+    } else {
+        println!("\nType this sentence exactly, then press Enter:\n");
+        println!("  {sentence}\n");
+    }
     print!("Press Enter when you're ready to start... ");
     io::stdout().flush()?;
     let mut throwaway = String::new();
@@ -250,8 +266,12 @@ fn cmd_benchmark(args: BenchmarkArgs) -> anyhow::Result<()> {
     let elapsed = start.elapsed();
     let typed = typed.trim_end_matches(['\n', '\r']);
 
-    let report = benchmark::score(&sentence, typed, elapsed);
-    report.print(if args.chording { "chorded" } else { "raw" });
+    let label = if args.chording { "chorded" } else { "raw" };
+    if let Some(word) = &args.repeat_word {
+        benchmark::score_repeated(word, typed, elapsed).print(label);
+    } else {
+        benchmark::score(&sentence, typed, elapsed).print(label);
+    }
     Ok(())
 }
 
