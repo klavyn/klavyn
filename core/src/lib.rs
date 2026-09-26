@@ -1,4 +1,4 @@
-//! Pure chord-matching core for typhony.
+//! Pure chord-matching core for klavyn.
 //!
 //! Everything here is OS-independent — no global key capture, no input
 //! injection — so the same logic drives both the native CLI (behind

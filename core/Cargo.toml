@@ -1,10 +1,10 @@
 [package]
-name = "typhony-core"
+name = "klavyn-core"
 version = "0.1.0"
 edition = "2024"
-description = "Pure chord-matching core for typhony: letter-set dictionary lookup and chord buffering, with no OS dependencies so it also compiles to WASM."
+description = "Pure chord-matching core for klavyn: letter-set dictionary lookup and chord buffering, with no OS dependencies so it also compiles to WASM."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/nickvigilante/typhony"
+repository = "https://github.com/nickvigilante/klavyn"
 
 [dependencies]
 csv = "1"

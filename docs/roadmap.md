@@ -1,4 +1,4 @@
-# typhony roadmap
+# klavyn roadmap
 
 Planning doc for the two in-flight tracks: the demo website and the config/macro system.
 Snapshot date: 2026-09-26.
@@ -18,9 +18,9 @@ The native CLI works and covers a full suite of measurement tools:
 
 Architecture: a Cargo workspace.
 
-- `typhony-core` — pure, OS-independent chord logic (dictionary letter-set lookup + abbreviation overlay, and the `ChordBuffer` timing/roll model). Compiles to WASM.
+- `klavyn-core` — pure, OS-independent chord logic (dictionary letter-set lookup + abbreviation overlay, and the `ChordBuffer` timing/roll model). Compiles to WASM.
 - root binary — the CLI: rdev listener, enigo injector, benchmark scoring.
-- `typhony-wasm` — wasm-bindgen bindings over core for the browser demo.
+- `klavyn-wasm` — wasm-bindgen bindings over core for the browser demo.
 
 Key empirical findings (candidates for the site's data section):
 
@@ -35,8 +35,8 @@ Goal: a triple-threat portfolio piece — the keylogger-demonstration software, 
 Stack: wasm-pack + a lightweight static site.
 Host: GitHub Pages on the repo.
 
-1. **Done** — extract `typhony-core` (pure, WASM-ready).
-2. **Done** — `typhony-wasm` crate; builds to a 184KB module exporting a `Trainer` class (`lookup`, `size`), dictionaries embedded via `include_str!`. Toolchain moved from brew Rust to rustup for the wasm32 target.
+1. **Done** — extract `klavyn-core` (pure, WASM-ready).
+2. **Done** — `klavyn-wasm` crate; builds to a 184KB module exporting a `Trainer` class (`lookup`, `size`), dictionaries embedded via `include_str!`. Toolchain moved from brew Rust to rustup for the wasm32 target.
 3. **Todo — the site.** Three sections:
    - Interactive in-page chord trainer running on the WASM core. The page's own textarea provides keydown/keyup in a sandbox; JS tracks held keys and calls `Trainer.lookup` on release. This is also the keylogger-ethics hook: the page contrasts the sandboxed in-page demo against what the native tool does (global capture, OS permissions) — the distinction SECURITY.md already draws.
    - Data/methodology writeup: the findings above, with the resolution floor as the rigor credential.
@@ -51,7 +51,7 @@ The idea: move chords/macros out of hardcoded CSVs into a versionable, CI-testab
 
 ### Config file
 
-- A TOML file — name TBD: `.typhony.toml` (project-local, git-tracked) is the leading option; a global `~/.config/typhony/config.toml` may also be supported, with project config overriding.
+- A TOML file — name TBD: `.klavyn.toml` (project-local, git-tracked) is the leading option; a global `~/.config/klavyn/config.toml` may also be supported, with project config overriding.
 - Stores everything: chord rules, macros, and settings (timing thresholds, dictionary references, abbreviation tiers).
 - Because it is a plain file, the whole configuration is versionable in git.
 
@@ -92,7 +92,7 @@ The idea: move chords/macros out of hardcoded CSVs into a versionable, CI-testab
 ### CI testing
 
 - The config carries test cases: a timed input sequence and the expected output.
-- `typhony test` (new subcommand) replays each case deterministically and asserts output == expected, failing with actual-vs-expected on mismatch.
+- `klavyn test` (new subcommand) replays each case deterministically and asserts output == expected, failing with actual-vs-expected on mismatch.
 - This lets common words/phrases be locked down: change a rule, run CI, and know immediately whether every expected expansion still holds.
 - Sketch:
 
@@ -111,13 +111,13 @@ The idea: move chords/macros out of hardcoded CSVs into a versionable, CI-testab
 
 ### Rough build order
 
-1. Define and parse the TOML schema in `typhony-core` (serde), behind a `Config` type; keep the CSV path as a fallback/import source.
+1. Define and parse the TOML schema in `klavyn-core` (serde), behind a `Config` type; keep the CSV path as a fallback/import source.
 2. Deterministic replay harness in core: feed `(key, timestamp)` events through `ChordBuffer` with the configured threshold, collect outputs. Pure and unit-testable.
-3. `typhony test` subcommand: load config, run `[[test]]` cases, report pass/fail, `--explain` traces.
-4. Recorder: `typhony record` to capture live input into config rules.
+3. `klavyn test` subcommand: load config, run `[[test]]` cases, report pass/fail, `--explain` traces.
+4. Recorder: `klavyn record` to capture live input into config rules.
 5. Migrate the bundled dictionaries/abbreviations to (or make them importable into) the config format.
 
 ## Open reminders
 
 - Dotfiles PRs awaiting merge: #99 (chordgen), #100 (cargo-audit), #101 (rustup + wasm-pack).
-- Name: settled on `typhony` (chord + accordion; free on crates.io/npm/GitHub).
+- Name: renamed from `typhony` to `klavyn` (from _clavis_/_klavier_, Latin/German for key/keyboard). The old name read as a portmanteau of "typhoon" and "phony"; `klavyn` cleared the GitHub org and had no conflicting software trademark. Domain: `klavyn.app`.
