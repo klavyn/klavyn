@@ -133,4 +133,11 @@ No spaced-repetition training yet — see [chordgen](https://github.com/dlip/cho
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
+klavyn is open source under a split that matches what each part is.
+
+- **Code** — the Rust crates, the WASM build, and the site's scripts and styles — is licensed under either [Apache License, Version 2.0](LICENSE-APACHE) or the [MIT license](LICENSE-MIT), at your option.
+- **Content** — the documentation, the written material on the site, and the learning/training content — is licensed under [Creative Commons Attribution 4.0 International](LICENSE-CC-BY-4.0.txt) (CC-BY-4.0). Reuse it freely, with attribution.
+
+The "klavyn" name, wordmark, and logo are trademarks and are **not** covered by any of these licenses — see [TRADEMARKS.md](TRADEMARKS.md).
+
+Unless you state otherwise, any contribution you submit for inclusion is licensed the same way: code under MIT/Apache-2.0, content under CC-BY-4.0, with no additional terms.
