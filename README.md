@@ -1,8 +1,12 @@
 # korder
 
+**Keyboard shortcuts for every language.**
+
 A QWERTY chorded-typing trainer.
 
 Press the letters of a word at once, in any order, and korder replaces what you typed with the whole word — the same idea as [CharaChorder](https://www.charachorder.com/), approximated in software on a normal keyboard, with no special hardware required.
+
+Dictionaries ship for many common languages (see [Multilingual support](#multilingual-support)), and the abbreviation tier is meant to grow by community-submitted overrides on top of the standard per-language config, not just the built-in defaults.
 
 See [SECURITY.md](SECURITY.md) before running this: korder is, mechanically, a global keylogger, and that document says exactly what it does and doesn't do with that access.
 

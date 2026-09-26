@@ -6,7 +6,7 @@ mod matcher;
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand};
@@ -328,19 +328,30 @@ fn start_chord_engine_if_requested(args: &BenchmarkArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Default)]
-struct TrialTracker {
-    first_key: Option<Instant>,
-    backspaces: usize,
+/// A committed chord reported by the benchmark chord loop to the trial
+/// runner: the word it resolved to, and how long the chord itself took to
+/// execute (first letter-press to last letter-press of the burst, so it
+/// excludes both pre-chord reaction time and the post-release roll-gap /
+/// delimiter wait).
+struct ChordSpan {
+    word: String,
+    span: Duration,
 }
 
-/// Runs `args.trials` isolated reps of typing `args.word` once each,
-/// timed from the first real keystroke (not the "ready" prompt) to
-/// pressing Enter. See benchmark::Trial for why this exists instead of
-/// just running --repeat-phrase with duration_secs=0: rapid repeated
-/// chording bleeds separate attempts into one unresolvable burst if
-/// there's no real pause between them, and a discrete-trial loop
-/// naturally provides that pause (each rep waits for its own "ready?").
+/// Runs `args.trials` isolated reps of producing `args.word` once each.
+///
+/// The two modes measure different mechanics but report the same thing —
+/// per-trial time to produce the target word, plus a hit/miss — so raw
+/// and chorded runs stay comparable:
+///
+/// - Raw: time from your first keystroke to Enter, matched against the
+///   typed line. A private per-trial listener captures first-keystroke
+///   timing and any backspaces.
+/// - Chorded: the typed line can't be used — your Enter both ends the
+///   trial and commits the chord, and korder's correction lands *after*
+///   the line is submitted, unreachable via stdin. So the chord engine
+///   itself reports what it resolved and how long the burst took, over a
+///   channel; stdin is read only to consume your Enter and advance.
 fn cmd_benchmark_trials(args: BenchmarkArgs) -> anyhow::Result<()> {
     let n = args.trials.unwrap();
     let word = args
@@ -348,130 +359,150 @@ fn cmd_benchmark_trials(args: BenchmarkArgs) -> anyhow::Result<()> {
         .clone()
         .ok_or_else(|| anyhow::anyhow!("--trials requires --word"))?;
 
-    // Only one rdev::listen() can run per process — a second concurrent
-    // registration breaks the first one (confirmed: chording + a
-    // per-trial listener crashed chord_loop's listener immediately). So
-    // when chording is on, a single background thread does double duty:
-    // chord matching/injection AND first-keystroke/backspace tracking for
-    // whichever trial is currently in progress, via a shared tracker the
-    // main thread resets before each trial and reads after.
-    let tracker = Arc::new(Mutex::new(TrialTracker::default()));
     if args.chording {
-        let mut dict = Dictionary::load(&args.dictionary)?;
-        if let Some(abbrev) = &args.abbrev {
-            dict.merge_overlay(abbrev)?;
-        }
-        if dict.is_empty() {
-            anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
-        }
-        let injector = Injector::new()?;
-        let roll_gap_ms = args.roll_gap_ms;
-        let tracker = Arc::clone(&tracker);
-        std::thread::spawn(move || {
-            if let Err(e) = tracked_chord_loop(dict, roll_gap_ms, injector, tracker) {
-                eprintln!("korder: chord engine stopped: {e}");
-            }
-        });
-        println!("(chording ON)");
+        run_chorded_trials(&args, &word, n)
     } else {
-        println!("(chording OFF — baseline)");
+        run_raw_trials(&word, n)
     }
+}
 
+fn run_raw_trials(word: &str, n: u32) -> anyhow::Result<()> {
+    println!("(chording OFF — baseline)");
     let mut trials = Vec::with_capacity(n as usize);
     for i in 1..=n {
-        // No "ready?" gate — straight to typing, so it's just
-        // type-word/Enter/type-word/Enter with no double confirmation.
         print!("\nTrial {i}/{n}: type \"{word}\", then Enter... ");
         io::stdout().flush()?;
 
-        // Not chording: safe to use a fresh per-trial listener, since no
-        // other rdev::listen() is running concurrently in that case.
-        let solo_rx = if !args.chording {
-            let (tx, event_rx) = mpsc::channel::<(Instant, EventType)>();
-            std::thread::spawn(move || {
-                let rx = spawn_listener();
-                for event in rx {
-                    let at = Instant::now();
-                    if tx.send((at, event.event_type)).is_err() {
-                        return;
-                    }
+        let (tx, event_rx) = mpsc::channel::<(Instant, EventType)>();
+        std::thread::spawn(move || {
+            let rx = spawn_listener();
+            for event in rx {
+                let at = Instant::now();
+                if tx.send((at, event.event_type)).is_err() {
+                    return;
                 }
-            });
-            Some(event_rx)
-        } else {
-            *tracker.lock().unwrap() = TrialTracker::default();
-            None
-        };
+            }
+        });
 
         let mut typed = String::new();
         io::stdin().read_line(&mut typed)?;
         let end = Instant::now();
-        // Let any keystroke from just before Enter finish arriving.
-        std::thread::sleep(Duration::from_millis(30));
+        std::thread::sleep(Duration::from_millis(30)); // let the last keystroke arrive
 
-        let (first_key, backspaces) = if let Some(event_rx) = solo_rx {
-            let mut first_key = None;
-            let mut backspaces = 0usize;
-            while let Ok((at, event_type)) = event_rx.try_recv() {
-                if let EventType::KeyPress(key) = event_type {
-                    first_key.get_or_insert(at);
-                    if key == RdevKey::Backspace {
-                        backspaces += 1;
-                    }
+        let mut first_key = None;
+        let mut backspaces = 0usize;
+        while let Ok((at, event_type)) = event_rx.try_recv() {
+            if let EventType::KeyPress(key) = event_type {
+                first_key.get_or_insert(at);
+                if key == RdevKey::Backspace {
+                    backspaces += 1;
                 }
             }
-            (first_key, backspaces)
-        } else {
-            let t = tracker.lock().unwrap();
-            (t.first_key, t.backspaces)
-        };
-        let start = first_key.unwrap_or(end);
-        let elapsed = end.saturating_duration_since(start);
+        }
+        let elapsed = end.saturating_duration_since(first_key.unwrap_or(end));
         let typed = typed.trim_end_matches(['\n', '\r']).trim();
-
         trials.push(benchmark::Trial {
             elapsed,
             matched: typed == word,
             backspaces,
         });
     }
-
-    let label = if args.chording { "chorded" } else { "raw" };
-    benchmark::TrialsReport { word, trials }.print(label);
+    benchmark::TrialsReport {
+        word: word.to_string(),
+        trials,
+    }
+    .print("raw");
     Ok(())
 }
 
-/// Like `chord_loop`, but also updates `tracker` on every keypress —
-/// see `cmd_benchmark_trials` for why this exists instead of running
-/// `chord_loop` and a separate tracking listener side by side.
-fn tracked_chord_loop(
+fn run_chorded_trials(args: &BenchmarkArgs, word: &str, n: u32) -> anyhow::Result<()> {
+    let mut dict = Dictionary::load(&args.dictionary)?;
+    if let Some(abbrev) = &args.abbrev {
+        dict.merge_overlay(abbrev)?;
+    }
+    if dict.is_empty() {
+        anyhow::bail!("dictionary at {:?} loaded 0 chords", args.dictionary);
+    }
+    let injector = Injector::new()?;
+    let roll_gap_ms = args.roll_gap_ms;
+    let (span_tx, span_rx) = mpsc::channel::<ChordSpan>();
+    std::thread::spawn(move || {
+        if let Err(e) = benchmark_chord_loop(dict, roll_gap_ms, injector, span_tx) {
+            eprintln!("korder: chord engine stopped: {e}");
+        }
+    });
+    println!("(chording ON)");
+
+    let mut trials = Vec::with_capacity(n as usize);
+    for i in 1..=n {
+        print!("\nTrial {i}/{n}: chord \"{word}\", then Enter... ");
+        io::stdout().flush()?;
+
+        while span_rx.try_recv().is_ok() {} // drop any spans from before this trial
+
+        let mut typed = String::new();
+        io::stdin().read_line(&mut typed)?;
+        std::thread::sleep(Duration::from_millis(50)); // let the Enter-triggered commit report
+
+        // The last span reported this trial is the chord that just
+        // committed; earlier ones would be stray extra chords in the same
+        // line (the user was asked for exactly one).
+        let mut last_span: Option<ChordSpan> = None;
+        while let Ok(span) = span_rx.try_recv() {
+            last_span = Some(span);
+        }
+        let (elapsed, matched) = match last_span {
+            Some(s) => (s.span, s.word == word),
+            None => (Duration::ZERO, false),
+        };
+        trials.push(benchmark::Trial {
+            elapsed,
+            matched,
+            backspaces: 0, // in chorded mode korder does the correcting, not the user
+        });
+    }
+    benchmark::TrialsReport {
+        word: word.to_string(),
+        trials,
+    }
+    .print("chorded");
+    Ok(())
+}
+
+/// Chord loop that reports each committed, matched chord over `span_tx`
+/// with the burst's first-press-to-last-press duration. See
+/// `cmd_benchmark_trials` for why chorded trials measure this rather than
+/// the typed line.
+fn benchmark_chord_loop(
     dict: Dictionary,
     roll_gap_ms: u64,
     mut injector: Injector,
-    tracker: Arc<Mutex<TrialTracker>>,
+    span_tx: mpsc::Sender<ChordSpan>,
 ) -> anyhow::Result<()> {
     let mut buffer = ChordBuffer::new(Duration::from_millis(roll_gap_ms));
+    let mut burst_first: Option<Instant> = None;
+    let mut burst_last = Instant::now();
     let rx = spawn_listener();
     for event in rx {
         let now = Instant::now();
         match event.event_type {
-            EventType::KeyPress(key) => {
-                {
-                    let mut t = tracker.lock().unwrap();
-                    t.first_key.get_or_insert(now);
-                    if key == RdevKey::Backspace {
-                        t.backspaces += 1;
-                    }
+            EventType::KeyPress(key) => match key_to_letter(key) {
+                Some(c) => {
+                    burst_first.get_or_insert(now);
+                    burst_last = now;
+                    buffer.key_down(c, now);
                 }
-                match key_to_letter(key) {
-                    Some(c) => buffer.key_down(c, now),
-                    None => {
-                        if let Some(burst) = buffer.flush_now() {
-                            handle_burst(&burst, &dict, Some(&mut injector), true);
+                None => {
+                    if let Some(burst) = buffer.flush_now() {
+                        if let Some(word) = handle_burst(&burst, &dict, Some(&mut injector), true) {
+                            let span = burst_last
+                                .saturating_duration_since(burst_first.unwrap_or(burst_last));
+                            let _ = span_tx.send(ChordSpan { word, span });
                         }
                     }
+                    burst_first = None;
                 }
-            }
+            },
             EventType::KeyRelease(key) => {
                 if let Some(c) = key_to_letter(key) {
                     buffer.key_up(c, now);
@@ -483,15 +514,16 @@ fn tracked_chord_loop(
     anyhow::bail!("listener thread ended unexpectedly")
 }
 
+/// Resolves and (optionally) injects a committed chord. Returns the
+/// matched word, so a caller timing the chord can pair the result with a
+/// span; returns None if the letter set matched nothing.
 fn handle_burst(
     burst: &matcher::BurstResult,
     dict: &Dictionary,
     injector: Option<&mut Injector>,
     quiet: bool,
-) {
-    let Some(word) = dict.lookup(&burst.letters) else {
-        return;
-    };
+) -> Option<String> {
+    let word = dict.lookup(&burst.letters)?.to_string();
     if !quiet {
         eprintln!(
             "korder: chord {:?} -> \"{word}\"",
@@ -499,10 +531,11 @@ fn handle_burst(
         );
     }
     if let Some(injector) = injector {
-        if let Err(e) = injector.replace(burst.press_count, word) {
+        if let Err(e) = injector.replace(burst.press_count, &word) {
             eprintln!("korder: injection failed: {e}");
         }
     }
+    Some(word)
 }
 
 fn detect_rollover() -> anyhow::Result<()> {
