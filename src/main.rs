@@ -60,6 +60,31 @@ enum Commands {
     /// here a chord's setup time is charged to it as the gap from the
     /// previous word.
     Cascade(CascadeArgs),
+    /// Repeat one word as fast as you can for a fixed window, counting
+    /// reps. In chord mode a space is injected the instant the chord's keys
+    /// release (no artificial delay), so you can fire the next chord
+    /// immediately — pushing chording toward its speed ceiling.
+    Race(RaceArgs),
+}
+
+#[derive(Args, Clone)]
+struct RaceArgs {
+    /// The word to repeat.
+    #[arg(long, default_value = "be")]
+    word: String,
+
+    /// The chord keys for the word (letters, "+" optional). Defaults to the
+    /// word's distinct letters.
+    #[arg(long)]
+    chord_keys: Option<String>,
+
+    /// Chord the word (auto-spacing on release) instead of typing it.
+    #[arg(long)]
+    chording: bool,
+
+    /// Length of the timed window, in seconds (starts on your first key).
+    #[arg(long, default_value_t = 15)]
+    secs: u64,
 }
 
 #[derive(Args, Clone)]
@@ -230,6 +255,7 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::Segments(args)) => cmd_segments(args),
         Some(Commands::Crossover(args)) => cmd_crossover(args),
         Some(Commands::Cascade(args)) => cmd_cascade(args),
+        Some(Commands::Race(args)) => cmd_race(args),
         None => run(cli.run_args),
     }
 }
@@ -1115,6 +1141,176 @@ fn cascade_chord_costs(
     Ok(costs)
 }
 
+/// Advances through a target word one letter at a time, counting each
+/// completion. A wrong letter restarts, treating it as the possible first
+/// letter of a fresh attempt so "bbe" still finds "be".
+struct RepCounter {
+    target: Vec<char>,
+    idx: usize,
+    count: u64,
+}
+
+impl RepCounter {
+    fn new(word: &str) -> Self {
+        Self {
+            target: word.chars().collect(),
+            idx: 0,
+            count: 0,
+        }
+    }
+
+    fn push(&mut self, c: char) {
+        if c == self.target[self.idx] {
+            self.idx += 1;
+        } else {
+            self.idx = usize::from(c == self.target[0]);
+        }
+        if self.idx == self.target.len() {
+            self.count += 1;
+            self.idx = 0;
+        }
+    }
+}
+
+/// Repeats one word for a fixed window, counting reps. In chord mode a
+/// space is injected the instant the word's chord keys all release, so the
+/// next chord can fire immediately — the auto-delimiter that lets chording
+/// run at its ceiling.
+fn cmd_race(args: RaceArgs) -> anyhow::Result<()> {
+    let word = args.word.to_lowercase();
+    if word.is_empty() {
+        anyhow::bail!("--word was empty");
+    }
+    let chord_set: std::collections::BTreeSet<char> = match &args.chord_keys {
+        Some(s) => s
+            .chars()
+            .filter(|c| c.is_ascii_alphabetic())
+            .map(|c| c.to_ascii_lowercase())
+            .collect(),
+        None => word.chars().collect(),
+    };
+    let secs = args.secs.max(1);
+
+    let (tx, rx) = mpsc::channel::<(Instant, EventType)>();
+    std::thread::spawn(move || {
+        let listener = spawn_listener();
+        for event in listener {
+            let at = Instant::now();
+            if tx.send((at, event.event_type)).is_err() {
+                return;
+            }
+        }
+    });
+    let mut injector = if args.chording {
+        Some(Injector::new()?)
+    } else {
+        None
+    };
+    warm_up_listener();
+    while rx.try_recv().is_ok() {}
+
+    let mode = if args.chording { "chord" } else { "type" };
+    let keys = chord_set.iter().collect::<String>();
+    println!(
+        "\nRepeat \"{word}\" ({mode}{}) as fast as you can for {secs}s.",
+        if args.chording {
+            format!(
+                ", chord {}",
+                keys.chars()
+                    .collect::<Vec<_>>()
+                    .iter()
+                    .map(|c| c.to_string())
+                    .collect::<Vec<_>>()
+                    .join("+")
+            )
+        } else {
+            String::new()
+        }
+    );
+    println!("The clock starts on your first key. Go!\n");
+
+    let mut start: Option<Instant> = None;
+    let mut deadline = Instant::now();
+    let mut counter = RepCounter::new(&word);
+    let mut held: HashSet<char> = HashSet::new();
+    let mut burst: std::collections::BTreeSet<char> = std::collections::BTreeSet::new();
+    let mut chord_count: u64 = 0;
+
+    loop {
+        let wait = match start {
+            None => Duration::from_secs(3600),
+            Some(_) => deadline.saturating_duration_since(Instant::now()),
+        };
+        if start.is_some() && wait.is_zero() {
+            break;
+        }
+        let (at, ev) = match rx.recv_timeout(wait.min(Duration::from_millis(200))) {
+            Ok(v) => v,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if start.is_some() && Instant::now() >= deadline {
+                    break;
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        if start.is_none() {
+            if matches!(ev, EventType::KeyPress(k) if key_to_letter(k).is_some()) {
+                start = Some(at);
+                deadline = at + Duration::from_secs(secs);
+            } else {
+                continue;
+            }
+        }
+        if at > deadline {
+            break;
+        }
+
+        match ev {
+            EventType::KeyPress(key) => {
+                if let Some(c) = key_to_letter(key) {
+                    if args.chording {
+                        held.insert(c);
+                        burst.insert(c);
+                    } else {
+                        counter.push(c);
+                    }
+                }
+            }
+            EventType::KeyRelease(key) => {
+                if args.chording {
+                    if let Some(c) = key_to_letter(key) {
+                        held.remove(&c);
+                        if held.is_empty() && !burst.is_empty() {
+                            if burst == chord_set {
+                                chord_count += 1;
+                                if let Some(inj) = injector.as_mut() {
+                                    let _ = inj.press_space();
+                                }
+                            }
+                            burst.clear();
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let count = if args.chording {
+        chord_count
+    } else {
+        counter.count
+    };
+    let elapsed = secs as f64;
+    let per_sec = count as f64 / elapsed;
+    println!("\n=== race: \"{word}\" ({mode}), {secs}s ===");
+    println!("reps:      {count}");
+    println!("reps/sec:  {per_sec:.2}");
+    println!("words/min: {:.0}", per_sec * 60.0);
+    Ok(())
+}
+
 #[derive(Copy, Clone)]
 enum Category {
     /// Chord word 1, chord word 2, Return.
@@ -1577,5 +1773,20 @@ mod cascade_tests {
         assert_eq!(specs.len(), 4);
         assert_eq!(specs[0], "et".chars().collect());
         assert_eq!(specs[3], "fox".chars().collect());
+    }
+
+    #[test]
+    fn rep_counter_counts_and_recovers_from_stray_keys() {
+        let mut r = RepCounter::new("be");
+        for c in "bebebe".chars() {
+            r.push(c);
+        }
+        assert_eq!(r.count, 3);
+
+        let mut r = RepCounter::new("be");
+        for c in "bbe".chars() {
+            r.push(c); // stray 'b' then a clean "be"
+        }
+        assert_eq!(r.count, 1);
     }
 }

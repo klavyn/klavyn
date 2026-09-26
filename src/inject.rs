@@ -35,4 +35,12 @@ impl Injector {
             .key(Key::Return, Click)
             .map_err(|e| anyhow::anyhow!("enter injection failed: {e}"))
     }
+
+    /// Sends a synthetic Space press — the auto-delimiter injected the
+    /// instant a chord releases in the race benchmark.
+    pub fn press_space(&mut self) -> anyhow::Result<()> {
+        self.enigo
+            .key(Key::Space, Click)
+            .map_err(|e| anyhow::anyhow!("space injection failed: {e}"))
+    }
 }
